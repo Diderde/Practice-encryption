@@ -1,0 +1,40 @@
+# 已验证依赖版本快照（本机 .venv 实测）。安装请带摘要校验：
+#     python -m pip install --require-hashes -r requirements-lock.txt
+
+# 为什么带 --hash：本机 pip 走清华镜像、CI 走默认 PyPI——**两条渠道不同源**。版本号钉死
+# 只能保证"解析结果相同"，本文件把每个包可被选中的发行件逐个登记 sha256，两条渠道各自
+# 校验同一份摘要，才能证明拿到的是**同一批字节**。换平台/解释器需重生成（本仓实测环境
+# 是 CPython 3.12 / Windows x64；3.11 下 numpy==2.5.3 上游已无发行件，故可选依赖的钉版
+# 实际从 3.12 起——`requires-python >= 3.11` 指的是"零可选依赖也能跑"这层，CI 最小作业
+# 在 3.11/3.12 上验的就是它）。
+
+# 口径：
+#   - 只登记 Python 包；pip、setuptools 由 venv/runner 自带（锁它们等于用 requirements
+#     升级包管理器本身）。
+#   - 工具链不在此列：Rust 1.98.1 与 MSVC BuildTools / Windows SDK 见
+#     Licenses/README.md §3 的登记。
+#   - `start.bat` 是交互式修复路径，按版本号安装、**不**校验摘要；开发安装与 CI 走本锁。
+#   - 升级任一依赖时重生成：`pip download --no-deps --only-binary=:all: --python-version
+#     3.12 --implementation cp --platform win_amd64 --abi cp312 <pin>...` 取发行件，逐个算
+#     sha256 重登记；对账脚本用 PyPI JSON（pypi/<name>/<ver>/json 的 digests.sha256）。
+
+# 可选运行时依赖（缺席时相应套件/页签明确跳过、不计失败）
+numpy==2.5.3 \
+    --hash=sha256:0a59a421a32580a009e8a1751345bf829631b990dc1794b80514ab722b435def
+z3-solver==5.1.0.0 \
+    --hash=sha256:1561efd36e06f4cb7cbf11b63a2fba8fc8fdeb9c5754df90c84f9bd7a4864552
+dearpygui==2.3.1 \
+    --hash=sha256:26ed9197cdb30099c665bd1b23724e0dba60ad06b71344ecca7e52748c21874b
+# 测试侧（pytest 及其在本平台的传递依赖）
+pytest==9.1.1 \
+    --hash=sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c
+iniconfig==2.3.0 \
+    --hash=sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12
+pluggy==1.6.0 \
+    --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+pygments==2.21.0 \
+    --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9
+colorama==0.4.6 \
+    --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6

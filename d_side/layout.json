@@ -1,0 +1,506 @@
+{
+  "format_version": 1,
+  "byte_order": "little",
+  "header_field_spec": [
+    [
+      "fmt_ver",
+      1
+    ],
+    [
+      "flags",
+      1
+    ],
+    [
+      "header_len",
+      1
+    ],
+    [
+      "payload_len",
+      4
+    ],
+    [
+      "py_minor",
+      2
+    ],
+    [
+      "py_magic",
+      4
+    ],
+    [
+      "nonce",
+      12
+    ],
+    [
+      "seed",
+      32
+    ]
+  ],
+  "header_len": 57,
+  "field_semantics": {
+    "payload_len": "true marshal length BEFORE bucketing (fill excluded); ciphertext region length = bucket(payload_len)",
+    "py_minor": "packed as bytes([major, minor])",
+    "seed": ": 32-byte CSPRNG seed (keys are re-derived at boot, never stored)"
+  },
+  "mac": {
+    "alg": "blake2s-256",
+    "mode": "keyed (key = mac_key)",
+    "covered": "canonical header bytes (field spec order) ++ full ciphertext region (fill included)",
+    "excluded": "the mac field itself"
+  },
+  "flags_bits": {
+    "0": "payload_is_code_object (must be 1 in this increment)",
+    "1": "standard_gil_build",
+    "2": "debug_build",
+    "3": "compressed (always 0: no compression in this increment)",
+    "4": "external_key_mode (/; DEFAULT profile since 0.0.42, 0.0.42): 1 = seed zeroed in artifact, 32B key supplied at runtime via --key-file or EXE_SEED env (hex64); MAC covers the real-seed head, so boot rejects wrong/missing keys before decryption. Bit 0 (embedded seed) is now the opt-in control profile (`build --embed-key`), kept for the  ablation arm",
+    "5": "input_dependent_mode (早期轮次, since 0.0.42): 1 = the payload is a `main(argv, stdin)` VM program that reads the input windows; boot then flattens argv (separator byte, --key-file filtering, item cap and window caps are ALL per cell since 早期轮次 Phase 2 - see hardening.iface) and reads ALL of stdin, then absorbs both windows to the cell cap (早期轮次) - over-cap input is refused, never silently truncated. 0 = boot does NOT touch stdin at all (reading it would hang an interactive start), and ARGV/STDIN see empty windows",
+    "6-7": "reserved, must be 0; the build-side checker rejects any nonzero"
+  },
+  "bucket_ladder": [
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    131072,
+    262144,
+    524288,
+    1048576
+  ],
+  "bucket_rule": "B = smallest ladder value >= payload_len; fill = build-side PRF bytes (deterministic from seed+nonce); fill is encrypted and MAC-covered; boot slices by payload_len",
+  "errcode_map_storage": "早期轮次 batch2 (2-1.3): the folded code table (short code -> digit -> build site) is the only decoder for the reject channel, so it is now written ENCRYPTED when a maintainer passphrase is available: native_build.igarashi_rika -> workdir/errcode_map.enc.json, format ECM1 = scrypt(passphrase, salt=nonce, n=32768, r=8, p=1, dklen=32) feeding an HMAC-SHA256 counter keystream XOR (domain b'ks2', separate from the guard snapshot's ks1) over the canonical sort_keys JSON, plus a 16 B blake2s plaintext check so a wrong passphrase is reported instead of leaking half-decoded text. Passphrase sources, in order: azuchi_momo(map_pass=...) / --map-pass-file / $PRACTICE_ERRCODE_PASS. With none of them the table stays plaintext and the build line reports 'errcode_map plaintext' (honest, assertable). Decode side: native_build.koshimizu_toru + CLI `python -m d_side decode-map --map <enc> [--pass-file|--passphrase|$PRACTICE_ERRCODE_PASS]` (rc=2 on a wrong passphrase). The table never enters the product or the repo - only the maintainer workdir",
+  "compression": false,
+  "kdf": {
+    "prf": "hmac-sha256",
+    "extract": "HKDF-Extract(salt, IKM)",
+    "expand": "HKDF-Expand(prk, info, L=32), two independent expands (早期轮次: never one 64-byte slice)",
+    "enc_info": "bytes([sched_id, 0x01])",
+    "mac_info": "bytes([sched_id, 0x02])",
+    "note": "labels are neutral bytes (no identity strings); distinct per schedule for domain separation"
+  },
+  "nonce_derivation": "build-side only: HKDF-Expand(HKDF-Extract(payload_digest, seed), info=b'nonce\\x01', L=12); payload_digest = sha256(marshal bytes); external nonce input is refused ",
+  "schedule_select": "ryushen(seed): (int.from_bytes(seed,'big') & 7) % 8 + 1 -> ids 1..8 (full 8 topologies, 0.0.40; 3 bits = exactly 8 values, uniform 1/8 each; remap vs the 6-topology era is the expected consequence, 早期轮次 precedent)",
+  "schedules": {
+    "1": {
+      "name": "baseline",
+      "salt": "nonce",
+      "mix": "none"
+    },
+    "2": {
+      "name": "rivest",
+      "salt": "nonce ++ P(nonce_int) as 32B BE, where P(x)=a0+a1*x+a2*x^2+a3*x^3 mod 2^256 is a Rivest permutation polynomial (a1 odd, a2 even, a3 even; coefficients derived from seed)",
+      "mix": "rivest-cubic"
+    },
+    "3": {
+      "name": "tfsingle",
+      "salt": "nonce ++ x as 32B BE after 4 rounds of x = (x + ((x*x) | 5)) mod 2^256 starting from seed_int xor int(nonce++nonce); no independence/probability-product arguments allowed for this chained addition (red line, corpus 7.5)",
+      "mix": "t-function-local (Klimov-Shamir single-cycle shape; local atom only)"
+    },
+    "4": {
+      "name": "feistel3",
+      "salt": "nonce ++ (L || R) as 32B BE after 3 Feistel rounds on the two 128-bit halves of (seed xor nonce-extended); round function F_i(x) = k_i + x mod 2^128 with k_i = seed[8i:8i+8] doubled; bijective for ANY round function (Luby-Rackoff)",
+      "mix": "feistel-3-round (structural skeleton preferred per comparison table section 222)"
+    },
+    "5": {
+      "name": "arxcascade",
+      "salt": "nonce ++ x as 32B BE after 4 rounds of x = ((rotl(x, r_i) xor m_i) + m_i) mod 2^256, r_i = seed[4i] mod 255 + 1, m_i = seed[8i:8i+8] repeated 4x; every step is a bijection so the composition is a bijection (unconditional)",
+      "mix": "arx-cascade (rotate/xor/add; structurally distinct from polynomial and t-function families)"
+    },
+    "6": {
+      "name": "oddscale",
+      "salt": "nonce ++ x as 32B BE after 3 rounds of x = ((x * m_i) mod 2^256 xor k_i) + a_i, m_i = seed[8i:8i+8] repeated 4x with low bit set (odd multiplier: bijective mod 2^256), k_i/a_i = seed lanes repeated; every step is a bijection so the composition is a bijection (unconditional)",
+      "mix": "odd-scale cascade (multiplicative; structurally distinct from polynomial, t-function, feistel and arx families)"
+    },
+    "7": {
+      "name": "pairswap",
+      "salt": "nonce ++ x as 32B BE after 4 swap-or-not rounds: z = v xor k_i (k_i = seed lane repeated 4x), partner p = 128-bit half-swap of z (fixed-point-free involution), decision bit = low bit of (canonical a = min(z,p)) xor k_i - both members of a pair derive the same bit so each round is a conjugate of an involution hence an involution hence a bijection (exact; a first version comparing f(z)/f(p) magnitudes had an asymmetric decision, broke the involution and was caught by the w=16 exhaustive gate)",
+      "mix": "pairing-involution shuffle (swap-or-not, shelf section 8.1 / reading note 1; structurally distinct from feistel/arx/polynomial/t-function/multiplicative families)"
+    },
+    "8": {
+      "name": "laimassey",
+      "salt": "nonce ++ (L || R) as 32B BE after 3 Lai-Massey rounds with inter-step half-swap + odd-constant add: round keeps L xor R invariant and translates both halves by F_i(L xor R) = (L xor R) + k_i mod 2^128 (fiber translation = exact bijection for ANY F); the inter-step (bijective) breaks the fiber invariant; composition of exact bijections",
+      "mix": "lai-massey fiber translation (IDEA/Fox lineage; whole-state update via xor-difference, structurally distinct from the half-update feistel3)"
+    }
+  },
+  "schedule_notes": "topology differences are carried by salt construction + label bytes; 'info_order' from the plan table is a no-op under independent expands and was dropped at implementation time (早期轮次 note)",
+  "k3_anti_island": {
+    "min_runs": 5,
+    "window": 256,
+    "step": 128,
+    "threshold_bits": 7.0,
+    "decoy_sections": [".v1", ".v2", ".v3", ".v4"],
+    "chain_sections_note": "早期轮次 批2-4.2 face-5 (three mutually exclusive fake execution chains, .v5/.v6/.v7) is NOT integrated in this increment - the generator is broken WIP parked in .tmp//chain_wip/. Lesson recorded the hard way: those three names were once written into decoy_sections while the emitter was default-off, and this  gate then refused EVERY build (49 red cases). An absence-is-fatal list must land atomically with the thing it requires - never in advance",
+    "note": " (早期轮次): the exe must carry the decoy sections (each high-entropy, PRF-filled, exactly payload-length — the former 512B zero tail was a size-side channel removed after 早期轮次 round-3 intel) plus identity-marker zero hits; a no-decoy build is rejected at build time. 早期轮次 faces: .v3 (fake container root, decoy_faces.nishizono_chigusa) and .v4 (fake KDF constant island, decoy_faces.asahina_akane) joined the required set, so min_runs went 3 -> 5 = the old floor plus the two FIXED-size face islands (whole-file runs measured 8 on a v2 payload and 5 on the smallest v1 payload in the native suite - 5 is the floor that every shipped shape clears; 6 was tried and rejected a legitimate small-payload build). Re-measure if the decoy sizing rule, the bucket ladder or the face sizes change."
+  },
+  "decoy_faces": {
+    "since": "早期轮次 (0.0.42) - the 'six faces' work package",
+    "single_source": "d_side/builder/decoy_faces.py (leos_vincent = assembly, lauren_iroas = absence gate)",
+    "face2_resources": "3-5 fake RT_RCDATA entries with seed-derived, DERANGED names (r<hex6>): a real-parseable fake marshal code object, a fake 3.12 pyc header + PRF body, a plausible config JSON. Payload and the two seg* decoys keep the same shape so size no longer identifies the real one",
+    "face3_constant_island": "real public constants (SHA-256 K prefix, BLAKE2s IV prefix - they are genuinely in the image, hiding them is pointless) followed by a per-cell fake round-constant table and a PRF tail so the section still scans high-entropy",
+    "face4_label_bait": "for each of the 9 neutralized KDF labels (i1..i9) two 'more real than real' decoy labels shaped like the pre-neutralization names (vm-chunk-key-v2-ab12 ...); values are nonce-derived so they differ per cell. The REAL labels stay bare i1..i9",
+    "face1_fake_container": "a 64B VMB1-shaped root header (self-consistent geometry, all values fake) + PRF body in .v3",
+    "face6_behaviour_hook": "deleting any decoy changes the covered-section set -> keyed self-digest mismatch -> the reject path first runs a FACE_STEPS long blake2s chain (2048..4095, per cell) and only then exits 3. Deletion therefore leaves a behavioural trace (time + memory footprint) without revealing WHICH face was deleted; stderr stays empty (the silent-rejection contract pinned by 14 test assertions)",
+    "face_budget_bytes": 98304,
+    "measured_faces_bytes": 4105,
+    "absence_is_fatal": "lauren_iroas runs on the FINAL exe bytes + section table before out_exe is written; any missing face, wrong label count or over-budget total raises and aborts the build. azuchi_momo(faces=False) exists only to prove that gate has teeth",
+    "honest_limits": "decoys are delay/cognition-grade: they cost the analyst reading time and can be falsified by someone who first establishes which section the runtime actually consumes. The faces are therefore deliberately coupled to integrity (.v3/.v4 covered by the keyed self-digest) and to a behaviour hook (face6), so 'delete and see' is no longer a cheap falsification",
+    "sike_deferred": "face1/3's SIKE decoy block (plan section 3.1) is NOT in this increment: the self-break requirement names the Castryck-Decru attack with a Sage reference implementation, and neither Sage nor any SIKE/SIDH implementation exists on the build host (verified). Implementing SIKE-p434 plus CD from scratch is a separate research-grade work item, not a decoy face"
+  },
+  "deadpath": {
+    "since": "早期轮次 batch-2 (4.3) - plan section 3.3 'dead-path camouflage' (boot-internal, behaviour-equivalent curve arithmetic, ~8KB budget, consumes a decoy block, must not touch the main flow)",
+    "pin": "pins::DEADPATH, emitted by native_build.asuka_hina as a `pub const bool` driven by azuchi_momo(deadpath=True, default on). It is a const and NOT a static on purpose: this project already measured that a static selection axis defeats const folding, so a static pin would leave the off-arm in .text and the ablation would measure nothing",
+    "reachability": "single entry boot.rs lunlun, called from debidebi_debiru right after the RCDATA payload has been fetched. Gate = pins::DEADPATH && (head[1] & 0xC0) == 0 && !ct.is_empty(): the layer toggle ANDed with two runtime values (the flags byte of the header as loaded from .rdata, and the resource length handed back by the loader), so the call site is not a literal `if false` - reserved flags bits 6-7 are 0 for every shipped product (layout.json flags_bits) and the payload is never empty. The return value is discarded through std::hint::black_box at the call site, the same discipline as oliver_evans: without it DCE deletes the whole leg and the size measurement reports 0",
+    "consumes": "pins::DEADPATH_FEED = the SAME bytes as the face-1 pseudo-container section .v3 (decoy_faces.nishizono_chigusa: 64B fake VMB1 root header + 1KB PRF body; the former 512B zero tail was a size-side channel removed after 早期轮次 round-3, see the  note) - a reference, not a copy. Domain parameters are parsed at FIXED offsets: p from the 26..58 'key field' slot (the offset a reader first mistakes for key material), (a, b, Gx, Gy, n) from body 64..224, (A, B) from 224..288. The plan's SIKE decoy block is still being produced by a separate probe and is not wired into the product, so the block that is always present is what this leg actually eats; in a faces=False control build DEADPATH_FEED is an empty slice and the parse takes its 'these bytes do not form a curve' edge - which still changes nothing observable",
+    "computes": "two legs of GF(p) arithmetic over 256-bit Montgomery multiplication (CIOS, interleaved). Leg 1, short Weierstrass E1: y^2 = x^3 + a x + b - the three ordinary SEC1 domain-parameter checks, none of which needs an inversion: the singularity witness over the discriminant -16(4a^3+27b^2), 'is the G declared by the parameter list actually on E1', and a fixed-length constant-shaped Jacobian double-and-add ladder (unconditional add + select, window width derived per cell as 112..128 bits) using the list's own 'n' slot as the scalar plus the '[n]G == O' order check. Leg 2, Montgomery-shaped E2: y^2 = x^3 + A x^2 + B x - a fixed-length chain of 2-isogenies with kernel <(0,0)>, (A,B) -> (-2A, A^2 - 4B), with the x-coordinate of leg 1's projective output pushed as (x:z) -> (x^2 + B z^2 : x z) so no inversion is needed either. The witness bitmap plus both projective results are folded into one keyed blake2s 'receipt' which is then thrown away",
+    "labels": "HKDF domain separation continues the neutral sequence: i16 (extract salt) / i17 (expand info) over ikm = MAC-pin || nonce - deliberately NOT the raw seed (same reason as check-order group B: feeding seed||nonce into a fresh HKDF left a full seed copy in freed heap and the 早期轮次 step-3 memory self-proof caught it). The scalar, the ladder window, the isogeny step count and the fold key all come out of that 96-byte stream, and every temporary the leg creates is zeroed with suo_sango",
+    "never_rejects": "no exit, no output, no stderr, no new short code anywhere inside the leg: a structurally invalid decoy block is just another edge back to the main flow. Rejecting on decoy content would ADD an observable behaviour class, which is precisely what a dead path must not do (the same posture that keeps the SIKE block's own breakability out of the reject channel)",
+    "size_budget_bytes": 8192,
+    "measured_text_delta_bytes": 7680,
+    "measured_runtime_delta_ms": 0.6,
+    "measurement_recipe": "same seed / same payload / same build recipe, only the deadpath toggle flipped; .text FileRawSize read out of the PE section table with patcher.nui_sociere (.text raw size is 512-aligned, so the delta is quantised in 512 B steps: 249856 - 242176 = 7680 = 15 steps). Runtime = interleaved single-run samples per arm (6 each, median of the pooled samples) - taking the two medians from separate passes showed a spurious 4 ms because the first-run arm pays hot-page/AV scanning. Mechanism: .tmp//deadpath/measure.py + symbols.py (link.exe /MAP per-symbol attribution)",
+    "honest_note": "DELAY-GRADE, NOT A BOUNDARY. What it buys: a reader of .text finds a live call site plus ~8KB of curve arithmetic that genuinely consumes a decoy section, so 'nobody reads this section => it is a decoy' stops being a one-glance falsification, and deleting the leg leaves nothing an analyst can pin against a baseline. What it does NOT buy: it adds no offline hard problem (that is the ML-KEM line, plan section 1), it protects no secret (nothing it computes is used), it is measurable in wall-clock (the runtime delta is registered below, so the cost is not hidden from our own metrics), and anyone who first establishes which bytes the runtime really consumes can still name it as camouflage. Same posture as the faces: cognition/delay only",
+    "teeth": "tests/d_side/test_deadpath.py: pin-on product runs green with byte-identical stdout; pin-off .text strictly smaller with the same stdout; same-seed builds byte-identical with the feature on; two seeds derive different dead-path data (different image bytes, same stdout); source teeth on the black_box discard and the non-literal call-site predicate; GUARD_FAULT build still exits 3 with empty stderr; external-key cell's mid-run memory dump shows no new seed-shaped bytes"
+  },
+  "d3_guards": {
+    "default": "on; build-native --no-guards for VM / enterprise EDR endpoints (section 8 prerequisite)",
+    "native_layer_order": "早期轮次 batch2 (2-1.1): the five native guards are SEMANTICALLY INDEPENDENT and fail identically (silent exit 3), so their EXECUTION ORDER is a nonce-derived permutation computed at runtime by boot's fura_kanato (HKDF extract salt 'i10' / expand info 'i11' over the 12-byte nonce at head[13:25]; build-side mirror native_build.seraph_dazzlegarden). The group itself is the invariant: all five run before any key material is read. Members (order not fixed): IsDebuggerPresent / CheckRemoteDebuggerPresent / PEB.BeingDebugged (gs:[0x60] -> PEB+2) [one sub-check]; loaded-module enumeration, prefix match (fail-closed on enumeration failure); slot purity (.v0 present, >=32 B, tail all zero, .text present >=64 B and inside the covered set) - split out of ars_almal in this batch as shikinagi_akira; section digest: keyed blake2s-256 over the concatenated raw bytes of every present section (/; was unkeyed blake2s over .text only), compared against the .v0 slot (watarai_hibari); dll honeypot: blake2s(key=INTEG_KEY) over the pythonXY.dll sitting next to the exe, compared against the DLL_DIGEST pin (/; all-zero pin = honeypot not emitted = check skipped)",
+    "check_order_pin": "早期轮次 batch2 (2-1.1): pins CHECK_SEAL_A/CHECK_SEAL_B are keyed blake2s(order bytes || count, key=INTEG_KEY) truncated to 16 B. boot recomputes the permutation and compares; a mismatch takes the same silent exit 3 (this is the dual-source consistency tooth, NOT a secret - 120 and 6 permutations are enumerable, see native_build.seraph_dazzlegarden docstring). Group B (pre-decrypt: CPUID gate / primitive KAT / container MAC) permutes over MAC-pin||nonce with labels i12/i13 - deliberately NOT the raw seed: feeding seed||nonce into a fresh HKDF left a full seed copy in a freed heap block and the step-3 memory self-proof caught it. The red line 'MAC before decryption' is guaranteed by the GROUP boundary, not by an index. The coverage concatenation order (patcher._covered_image vs boot shikinagi_akira) stays section-table order - it is a data invariant shared by both ends and is deliberately NOT permuted",
+    "reject_timing_pad": "早期轮次 batch2 (2-1.2): both rejection channels (_exit3 and mayuzumi_kai) run oliver_evans(pins::REJECT_PAD) dummy blake2s iterations before exit(3). REJECT_PAD = 8192 + blake2s('pad\\x01'||MAC||nonce)[:4] % 16384, i.e. 8192..24575 rounds, derived at build time, zero runtime randomness. Purpose: every reject now pays the same computed floor, so 'which step failed first' stops being readable from wall-clock alone; the decoy-chain trace (FACE_STEPS) stays as an additional, deliberately distinguishable trace on the self-integrity branch (face 6 /). Writes nothing, prints nothing - the silent rc=3 contract and every stderr=='' assertion are untouched",
+    "denied_module_prefixes": ["frida", "x64dbg", "x32dbg", "x96dbg", "cheatengine", "detours", "sbiedll"],
+    "python_layer": "after interpreter init, before payload; sys.gettrace()/getprofile() must be None and sys.modules must not contain pdb/debugpy/ptvsd/pydevd/pydevd_tracing/frida; snapshot imports sys only (os is not in sys.modules under isolated init - importing it would be an observable divergence)",
+    "failure_semantics": "fail-closed; exit 3 silent by default, and there is NO runtime env switch for diagnostics (早期轮次 2.2 /  removed PRACTICE_ENCRYPTION_GUARD_DEBUG and VISI_HOLD_PATH as env backdoors - the product reads zero environment variables for them). Diagnostic short codes exist only in builds made with the build-time pins GUARD_FAULT (rejection reason exercised by injection) and DIAGNOSTIC (test-only, production always false); the decode table lives off-repo",
+    "guard_snippet_encoding": "早期轮次 2.1 : the Python-layer snapshot is shipped as a ciphertext byte array (PY_GUARD_ENC / PY_GUARD_DIAG_ENC), decoded at boot by a counter keystream (domain strings dk1/ks1, HMAC-SHA256). Key material = INTEG_KEY only (nonce-derived, sorahoshi_kirame / patcher.kaida_haru). 早期轮次 step 3 fix: the earlier form keyed it with seed||nonce and carried a PY_GUARD_SEED pin, which put the REAL seed in the .rdata of external-key products",
+    "self_digest": {
+      "alg": "blake2s-256 keyed (key = INTEG_KEY)",
+      "key_derivation": "INTEG_KEY = HKDF-Expand(HKDF-Extract(salt='', ikm=nonce), info='integ', L=32); single source: patcher.kaida_haru (build side) and boot.rs sorahoshi_kirame (runtime), both fed by the 12-byte nonce at head[13:25]",
+      "nonce_source": "head[13:25] comes from the pins HEAD_PREFIX, so it is present in BOTH modes: external-key builds zero only the seed, never the nonce",
+      "slot_section": ".v0",
+      "coverage": {
+        "included": "every section that is present in the file (FileRawPointer != 0 and FileRawSize != 0), concatenated in section-table order, using the RAW bytes (not the virtual extent)",
+        "excluded": [
+          ".v0 (the digest slot itself - a digest over its own slot is self-referential, section 8)",
+          "sections with FileRawPointer == 0 or FileRawSize == 0 (nothing to read from the file)",
+          "DOS header / NT headers / section table / optional header (they are not section raw bytes; CheckSum lives there and is zeroed after the digest)"
+        ],
+        "reloc": "INCLUDED on both sides (deliberate choice, recorded here): .reloc raw bytes are on disk and an attacker can rewrite the base-relocation table to redirect fixups, so leaving it out would re-open the very hole / closes",
+        "prerequisites": "section .text must be present with FileRawSize >= 64 and FileRawPointer != 0, and must be inside the covered set; the digest slot must be present with FileRawSize >= 32 and its bytes past offset 32 must all be zero; .text must carry 0 base relocations",
+        "identity": "both sides iterate the section table in file order and skip on the same predicate; the 早期轮次 round-3 finding (f: '.rdata/.rsrc are not covered') is closed by this, and the .rsrc tree (RCDATA payload, version info) now also feeds the digest"
+      },
+      "patcher": "d_side/builder/patcher.py: hayama_marin(exe_bytes, nonce) writes the keyed digest + zeroes the PE CheckSum + asserts .text relocation count == 0 + asserts slot purity; _covered_image is the single Python expression of the coverage rule above",
+      "runtime": "d_side/builder/boot.rs: ars_almal() re-derives the same byte string from the file on disk (never from the loaded image -  stays open and is registered in the 早期轮次 scope) and compares with the slot bytes read from the file",
+      "determinism": " holds: INTEG_KEY is a pure function of the pinned nonce and the covered bytes are a pure function of the linked image, so two builds from the same inputs stay byte-identical (pinned by the native suite)",
+      "honest_note": "the key is derivable by anyone holding the exe (the nonce is in the binary and the formula is in the code), so keying raises the bar against a blind byte patch and against 'flip a byte in .rdata and it still runs', but it is NOT a boundary against an analyst who rebuilds the KDF - same delay-grade posture as before, now over a wider surface",
+      "slot_note": "32B placeholder static in the boot template (nonzero init: zero-content statics get ICF-merged / unreferenced ones dropped), patched in place post-link",
+      "link_flags": "/Brepro + /DEBUG:NONE (deterministic anchor ; two full builds byte-identical, pinned by the native suite)"
+    },
+    "fault_injection": "build-time pins GUARD_FAULT (production always 0): 1=debugger 2=module 3=self-digest 4=python-layer; exercises the exact reject path",
+    "dll_honeypot": {
+      "pin": "DLL_DIGEST: [u8; 32] - all zero means the pin was not emitted and the runtime check is skipped (feature degrades off)",
+      "alg": "blake2s-256 keyed (key = INTEG_KEY, same derivation as the self digest) over the whole DLL file bytes",
+      "source": "the canonical DLL resolved by native_build.find_build_dll() - the SAME candidate order that feeds the T7 version/Authenticode pins, so build side and runtime side cannot point at different files; the runtime reads the file next to the exe, name built from the pinned py_minor two bytes (the literal 'python312' never appears in the image)",
+      "emitted_when": "container fmt_ver == 1 (folder-layout CPython product) and not embed_home; an embed-home single-file exe legitimately has no DLL beside it. A VM (fmt_ver 2) product does not load CPython, so the honeypot is off by default there - 早期轮次 measurement cells that ship a camouflage DLL next to a v2 payload turn it on with pins_override={'dll_honeypot': True}",
+      "rejects": "missing file, unreadable file, any byte drift: rename / zero-substitution / proxy DLL (the three experiments 早期轮次 round-3 attacker e ran, deep report section 2)",
+      "honest_note": "an attacker holding the exe can recompute the digest (the key comes from the pinned nonce); this closes the 'modify it and nothing happens' channel and turns the decoy into a tripwire, it is not a confidentiality boundary"
+    },
+    "honest_label": "delay-grade deterrence (architecture doc section 8): not a boundary; near-zero raise against a determined attacker who can patch the exe and recompute the digest"
+  },
+  "vm": {
+    "note": " v2 (fmt_ver=2): payload is a VM blob, not marshal. Opt-in via `build --vm`; native-only artifact. Values here are the single source of truth for both the builder and boot's vm module (double-path pin).",
+    "enabled_by": "build --vm",
+    "fmt_ver": 2,
+    "magic": "VMB1",
+    "header_len": 64,
+    "isa_ver": 6,
+    "physmap_ver": 1,
+    "opcode_count": 32,
+    "opcode_order": ["HALT", "LOADK", "MOVE", "ADD", "SUB", "MUL", "FLOORDIV", "LT", "EQ", "JMP", "JZ",
+                     "ITERNEW", "ITERNEXT", "CALL", "RET", "PRINT", "LOADN", "LOADG", "STOREG",
+                     "MAKEFUNC", "CALLV", "JN", "LOADS", "CONCAT", "LOADB", "TUPLE", "GETITEM",
+                     "ARGV", "STDIN", "XOR", "ROTL32", "HSTEP"],
+    "operand_widths": [[], [1, 2], [1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1],
+                       [2], [1, 2], [1, 1], [1, 1], [1, 1, 1, 1], [1], [1], [1], [1, 1], [1, 1],
+                       [1, 1], [1, 1, 1, 1], [1, 2], [1, 2], [1, 1, 1], [1, 1], [1, 1, 1], [1, 1, 1],
+                       [1, 1], [1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1]],
+    "b1_input_dependency": {
+      "since": "早期轮次 step 4 (ISA v4, 0.0.42)",
+      "ops": "ARGV(d, r): d = argv_win[regs[r]] ; STDIN(d, r): d = stdin_win[regs[r]] - both yield one byte as i128 (0..255), index comes from a REGISTER so loops work",
+      "windows": "argv_win = argv items joined by the cell's separator byte (iface.join; 256 = no separator at all), boot's own --key-file pair filtered out first per the cell's keystrip mode, stdin_win = the whole piped stdin. SINCE 早期轮次 Phase 2 the caps, the separator, whether argv[0] participates and which key-file form is stripped are all PER CELL (hardening.iface, from native_build.koyanagi_rou) - in the previous generation all of them were global constants in boot.rs, which is what let three independent attackers hand back the same contract and amortise it over eight cells. SINCE 早期轮次  both windows are ABSORBED TO THE FULL CAP before the payload sees them (pad byte derived per cell from the VM root), so the number of iterations - and therefore the VM step count - is a per-cell constant and carries no information about input length",
+      "lengths": "len(argv)/len(stdin) compile to LOADG of global kinds 3/4, materialised when the VM is built - never a compile-time constant, otherwise the input size would ship in clear inside the product. Since 早期轮次  kinds 3/4 report the ABSORBED length, i.e. the per-cell cap, so a target that loops to len() runs a fixed number of iterations. There is deliberately NO 'true length' kind: the CPython reference leg is handed the absorbed bytes and cannot tell the pre-pad length apart either, so an extra kind would be a pair of slots no payload can reach (the natural length semantics Phase 2 diversifies are reductions over the absorbed window)",
+      "bounds": "index out of window, non-integer index and over-cap process input all go through the existing bucket-code reject (E-111 index, E-112 window build, E-113 boot fill) -> silent exit 3. No new observable behaviour class; over-cap input is refused, never silently truncated. 早期轮次  note: the E-111 boundary moved from 'past the real length' to 'past the cap' - reading a pad byte is a value, not a rejection, because a rejection that depends on the real length is itself a length oracle (one binary search answers 'how long is the input')",
+      "payload_api": "def main(argv, stdin): ... with output via print (no new stdout channel). vm_compiler.axia_krone recognises the shape (module body contains only defs), umise_yotsuha points entry_fid at main, and yamagami_karuta(input_mode=True) refuses anything that does not consume input (vm_isa.lain_paterson) - a constant-output sample cannot ship as a measurement target (早期轮次 grading bias no.2)",
+      "handle_discipline": "argv/stdin parameters are compile-time handles: using them as a value, rebinding them, unpacking, slicing or passing them to a function is a TaeHanazono subset rejection, so there is no way for a handle to flow into arithmetic as a silent None",
+      "coexistence": "v4 is append-only: logical numbers 0..26 are untouched, so the physical opcode table for the first 27 ops is byte-identical to the v3 era for the same seed. Old-shaped module-level payloads keep working unchanged (input_mode defaults to false, the two new opcodes simply go unused)"
+    },
+    "v5_logic_ops": {
+      "since": "早期轮次+C (ISA v5)",
+      "why": "the earlier attack class (256 single-byte calibrations + linear rule fitting) is closed by making the payload's input function nonlinear (shape family B) and avalanche-mixing (chain); both need XOR and a 32-bit rotate, and emulating them in ~8 arithmetic steps each would leave the ARX structure plainly visible in the bytecode",
+      "ops": "XOR(d, a, b): d = a ^ b ; ROTL32(d, a, k): j = a mod 2^32, r = k mod 32, d = ((j << r) | (j >> (32 - r))) mod 2^32 - i.e. the low 32 bits are rotated, results are always < 2^32",
+      "domain": "non-negative integers only. Negative operands are a domain violation and go through the existing reject channel (vm_interp SaayaYamabuki / vm.rs E-116 -> silent exit 3), non-integers and strings keep the code they already had (E-42). No new observable behaviour class",
+      "intrinsic": "the payload source spells rotate as rotl32(a, k): vm_compiler expands a call to that name into the opcode at the call site (the name never enters the global table nor the product, and the marker cannot be used as a value - TaeHanazono). vm_isa.INTRINSICS is the single source of (opcode, arity, CPython closed form), so the reference harness and the shipping gates read the same table instead of each keeping a copy",
+      "coexistence": "v5 is append-only like v4: logical numbers 0..28 are untouched, so for one seed the first 29 physical bytes are identical to the v4 table; hayase_sou/physmap just take more items off the same permutation",
+      "not_yet": "no SHL/SHR/MOD opcodes (deliberate: mod 2^32 is expressible with FLOORDIV/MUL/SUB and the rotate covers the rest). The XOR/ROTL32 variant pool that used to be listed here as outstanding SHIPPED with 早期轮次 (three implementations each, see vm.variant_pool)"
+    },
+    "v6_chain_nativization": {
+      "since": "早期轮次 (ISA v6, closes the  residual 'the chain logic is present as bytecode')",
+      "op": "HSTEP(d, a, b): d = chain_step(regs[a] = state, regs[b] = message word). Payload source spells it as the intrinsic hstep(state, msg); like rotl32 it is expanded at the call site, so the name never enters the global table nor the product. Domain = non-negative integers, same reject family as XOR/ROTL32 (vm_interp SaayaYamabuki / vm.rs E-116 -> silent exit 3)",
+      "why": " got as far as runtime primitive capture in zone a and was stopped only because  chose ARX over keyed-blake2s. With the step in a native handler the forensic reader sees one opcode and two register numbers: no rotation amounts, no fold, no feedback term, and no chain constant anywhere in the instruction stream - the structure that used to be readable is now only reachable by executing the handler",
+      "profile_single_source": "vm_isa.kaburaki_roco(root) (Python, used by the reference leg, the authoritative VM leg and the gates) <-> vm.rs builds the SAME three streams and vm_ops::Chain decodes them (Rust). root = HKDF-Expand(container enc_key, 'i3') - the same value the chunk permutation (i7) and the dispatch-slot permutation (i15) already derive from, so the profile adds no new key-derivation surface and no new secret",
+      "derivation_domains": "i18 = 12B shape stream (rounds/fold position/fold count/injection form/couple/rotations/per-round order/tail), i19 = 64B constant stream, i20 = 64B mask stream, i21 = 1B absorb pad byte. Effective constant i = word(i19) XOR word(i20) - the two streams are kept as-is and each word is decoded at use, so neither the image nor the heap ever holds 'the round-constant table'. Honest limit: delay-grade, same class as  - whoever holds the artifact can rebuild the hierarchy",
+      "per_cell_axes": "rounds r in {2,3,4}; half-fold position and count (1 or 2, amount in {8,16}); injection form in {m*m, (m+KM)*m, ROTL32(m, T(m&0xFF)&31)} - all three NON-LINEAR in m by construction; state/message coupling on|off; per-round rotation amounts; per-round multiplicative re-injection coefficients (odd, so bijective mod 2^32); round ORDER (factorial-number permutation of the r rounds, derived from cfg[9]); tail rotation on|off. This is what closes 'break one cell, break all eight': the previous generation's chain shape was byte-identical across cells",
+      "diffusion_lesson": "two shapes that look reasonable and are not: (1) a plain 'm' injection term makes the chain linear in the message - measured col1 mean flips 4.22 bits; (2) folds without a multiplicative re-injection crush the state to 16 (or 8) bits and drive an early byte's difference to exactly 0 at the output - measured in a 64-cell sweep where 41 of 64 shapes failed the avalanche band and the worst mean was 2.3 bits. Both are now excluded from the derived domain, and the sweep that found them is reproducible from the 早期轮次 report's recipe. Rule of thumb recorded: the half-fold is an entropy-losing compression step, so every round must re-expand the state multiplicatively (v5's hand-written block did exactly that with g*g1 in round 3 - the  step makes it a per-cell coefficient instead of a literal)",
+      "table_form": "the 'table lookup' injection form is EVALUATED as T(z) = (z^2*A + z*B + C) mod M with z = m & 0xFF and used to SELECT THE ROTATION AMOUNT (T mod 32), never materialised and never used as an addend - a 256-entry table in memory is exactly the copyable shape  forbids, and an additive table term is linear in the message's high bits so it fails the avalanche band the same way a plain m injection does (deviations from the workbook's literal wording, registered in the 早期轮次 report; the algebraic-generation discipline is inherited from the B-generation quadratic table)",
+      "variant_pool": "vm_ops.rs now covers 11 hot opcodes x 3 implementations: the eight of 早期轮次 plus XOR, ROTL32 (早期轮次  - they were single-implementation, i.e. disassemble once and reuse across all cells) and HSTEP. Selection axis = pins::V_<OP>, computed by native_build.kuramochi_meruto(seed, nonce) at build time",
+      "absorb": "早期轮次 : both input windows are padded to the cell cap with the derived pad byte before the payload runs, so VM steps per evaluation are a per-cell constant. Gate evidence (c2 fixture, uniform 64/64 - the mode as it was when measured; under per_cell the same gate samples at the cell's own caps and the spread stays 0): 3,239 steps, spread 0 over the length ladder 0/1/2/16/32/63/64 on both channels, 14 samples. Scene-target pair (g5 zone a, same input): bc 14,123 steps / blob 1,344 B -> bc2 8,869 steps / 1,088 B - the interpreter got cheaper because the ~12-opcode ARX block became one opcode whose work happens natively; registered as a cost/benefit item, not hidden"
+    },
+    "physmap_derivation": {
+      "extract_label": "u16vm-isa-v1",
+      "expand_label": "isaperm",
+      "space": 256,
+      "algo": "fisher-yates over 0..255 taking the first opcode_count values; cursor rule: j = stream[j] % (i+1), swap, then j += 1 (mirror exactly on both sides)",
+      "rng_source": "keys._expand (HKDF-SHA256); the random module is never used (in-repo discipline)"
+    },
+    "chunk": {
+      "size_bytes": 256,
+      "alignment": "instruction boundary (fetch never crosses a chunk; straddling only exercised by the fixed-size gate mode)",
+      "tail_fill": "HKDF-Expand(vm_root, 'vm-fill' || u32le(logical)) - deterministic, hides chunk ends in ciphertext",
+      "count_rule": "nchunks = nmeta + ceil(padded IR length / size_bytes); fixed stride, no boundary table"
+    },
+    "key_derivation": {
+      "container_key": "keys.kanae(seed, nonce, sched)[0] - never stored in the blob",
+      "vm_root": "HKDF-Expand(container_key, 'vm-root', 32)",
+      "chunk_key": "HKDF-Expand(vm_root, 'vm-chunk-key', 32)",
+      "stream_mac_key": "HKDF-Expand(vm_root, 'vm-stream-mac', 32)",
+      "chunk_nonce": "HKDF-Expand(vm_root, 'vm-chunk-nonce' || u32le(logical), 12)",
+      "per_chunk_alg": "ChaCha20, counter=0, one distinct nonce per chunk - no keystream reuse ",
+      "honest_note": "v2 nonce comes from sha256(source text) instead of sha256(payload): the VM blob is a deterministic function of the source, so the digest is computable before encryption and 's intent is unchanged"
+    },
+    "chunk_permutation": {
+      "label": "vm-chunkperm",
+      "algo": "fisher-yates over nchunks; place[logical] = physical slot (one direction only, both sides use the same rule)",
+      "honest_label": "delay-grade: an attacker holding the artifact can recompute it from the embedded seed, same class as "
+    },
+    "resident": {
+      "slots": 2,
+      "max_contiguous_run_bytes": 256,
+      "layout": "each slot is its own fixed buffer; evicted slot is zeroed before reuse",
+      "pending": "page-aligned buffers with a guard gap between slots  so a byte-scan can never see two chunks adjacent"
+    },
+    "metadata": {
+      "enc": "same chunk scheme (own leading chunks), decrypted into native structs at load then wiped",
+      "fields": ["func_table (start u32, nregs u16)", "globals (kind u8, val u16)", "string pool (u16 len + utf8)", "entry_fid u16", "ir_used (u16 per IR chunk)"],
+      "entry_rule": "explicit entry_fid in the metadata; the probe's 'last function is the entry' convention is retired"
+    },
+    "limits": {
+      "max_jump_target": 65535,
+      "max_regs": 32,
+      "max_temp_regs": 32,
+      "staging_base": 32,
+      "max_call_args": 8,
+      "max_i16_const": 32767,
+      "integer_width": "i128, checked arithmetic - overflow aborts the payload instead of returning a wrong number",
+      "step_budget": 20000000
+    },
+    "load_validation_parity": {
+      "note": "/: the single source of truth for the blob LOAD gate. Both sides (Python authority vm_blob/vm_interp and boot's vm.rs) must reject the SAME set, in the same order (geometry -> ct length -> stream MAC -> metadata). i1_pegging tests see only the intersection, so a one-sided check is invisible to the equivalence gate - that is how  stayed alive. Pinned by tests/d_side/test_vm_gates.py::load_validation_parity: head fields are tampered AND re-MACed (holder-of-key model) so the field gate itself is what rejects, the three new metadata gates are exercised through a resealed metadata slot, constants/operand widths are cross-checked against vm.rs by value, and the Rust legs that no native channel can construct are pinned by source literal.",
+      "order": [
+        "header length",
+        "magic",
+        "field range/value gates",
+        "ct length vs self-reported geometry",
+        "stream MAC (before any decryption)",
+        "metadata parse with bounded reads",
+        "geometry closure + ir_used + func starts"
+      ],
+      "same_formula": [
+        {"item": "blob longer than header", "python": "vm_blob.shirayuki_tomoe (len(blob) < HEADER_LEN)", "rust": "vm.rs Vm::new (blob.len() < HEADER_LEN)"},
+        {"item": "magic == VMB1", "python": "vm_blob.shirayuki_tomoe", "rust": "vm.rs Vm::new h[0..4]"},
+        {"item": "fmt_ver in {2,3}", "python": "vm_blob.FMT_VER_SUPPORTED", "rust": "vm.rs fmt_ver != 2 && != 3"},
+        {"item": "isa_ver == 6 and physmap_ver == 1", "python": "vm_isa.ISA_VER / vm_isa.PHYSMAP_VER", "rust": "vm.rs isa_ver != 6 || pm_ver != 1"},
+        {"item": "op_count == 32 (LOGICAL_OPS)", "python": "vm_blob.shirayuki_tomoe", "rust": "vm.rs op_count != N_LOGICAL"},
+        {"item": "XOR/ROTL32/HSTEP operand domain (non-negative ints; ROTL32 and HSTEP fold their inputs mod 2^32, ROTL32 also k mod 32)", "python": "vm_interp.run (\"XOR\",\"ROTL32\") arm + \"HSTEP\" arm -> SaayaYamabuki", "rust": "vm.rs OP_XOR / OP_ROTL32 / OP_HSTEP arms -> E-116 (as_int keeps E-42 for non-int)"},
+        {"item": "chain profile streams: same HKDF labels (i18/i19/i20/i21) and same lengths (12/64/64/1) on both sides", "python": "vm_isa.kaburaki_roco + CHAIN_*_LABEL/CHAIN_*_BYTES", "rust": "vm.rs L_CHAIN_CFG/L_CHAIN_K/L_CHAIN_MASK/L_CHAIN_PAD -> ops::Chain; decoded by vm_ops::Chain (pinned by tests/d_side/test_native_vm.py chain_profile_kat and the source-literal pins in test_vm_gates.py)"},
+        {"item": "reserved == 0", "python": "vm_blob.shirayuki_tomoe", "rust": "vm.rs reserved != 0"},
+        {"item": "align == 1 (instruction-aligned chunks)", "python": "vm_blob.shirayuki_tomoe", "rust": "vm.rs align != 1"},
+        {"item": "nslots == RESIDENT_SLOTS (2)", "python": "vm_blob.shirayuki_tomoe vs vm_isa.RESIDENT_SLOTS", "rust": "vm.rs nslots != RESIDENT_SLOTS"},
+        {"item": "nchunks != 0", "python": "vm_blob.shirayuki_tomoe (/: added this round)", "rust": "vm.rs chunk geometry out of range"},
+        {"item": "1 <= chunk_size <= MAX_CHUNK(512)", "python": "vm_blob.MAX_CHUNK (/: was 0xFFFF on this side only)", "rust": "vm.rs MAX_CHUNK"},
+        {"item": "nmeta <= nchunks", "python": "vm_blob.shirayuki_tomoe (/: added this round)", "rust": "vm.rs nmeta exceeds nchunks"},
+        {"item": "len(ct) == nchunks * (chunk_size + tag)", "python": "vm_blob.shirayuki_tomoe", "rust": "vm.rs ct length inconsistent"},
+        {"item": "stream MAC = blake2s(mac_key, head || ct) == blob[32:64], checked BEFORE decryption", "python": "vm_blob.shirayuki_tomoe", "rust": "vm.rs Vm::new mac_input"},
+        {"item": "entry_fid < nfuncs", "python": "vm_blob.meta_unpack", "rust": "vm.rs entry_fid out of range"},
+        {"item": "head entry_fid == metadata entry_fid (single source)", "python": "vm_blob.meta_unpack ", "rust": "vm.rs reads entry from metadata only"},
+        {"item": "nmeta + len(ir_used) == nchunks (geometry closure)", "python": "vm_blob.meta_unpack (/: added this round)", "rust": "vm.rs IR chunk count inconsistent"},
+        {"item": "every ir_used[i] <= chunk_size", "python": "vm_blob.meta_unpack ", "rust": "vm.rs ir_used exceeds chunk size"},
+        {"item": "func start < len(ir_used) * chunk_size (inside the IR region, not anywhere in ct)", "python": "vm_blob.meta_unpack (/: was len(ct) on this side only)", "rust": "vm.rs func start beyond IR region"},
+        {"item": "global table Func fid < nfuncs, at load time", "python": "vm_blob.meta_unpack (/: added this round)", "rust": "vm.rs read_globals fid check"},
+        {"item": "string pool entry <= MAX_CHUNK * 64 bytes", "python": "vm_blob.meta_unpack (/: added this round)", "rust": "vm.rs read_strings"},
+        {"item": "metadata reads are bounds-checked and fail as a structure error (never a raw slice/struct.error escape)", "python": "vm_blob.nagao_kei (/)", "rust": "vm.rs MetaReader::take"},
+        {"item": "PSIV per-slot tag verified (fmt_ver 3)", "python": "vm_blob.fuwa_minato -> psiv.decrypt_block", "rust": "vm.rs decrypt_slot -> psiv::decrypt_block"},
+        {"item": "operand kind gates at decode: register / global / func ids in range (R/G/F/S of vm_isa.OP_KINDS)", "python": "vm_interp.run  table", "rust": "vm.rs melissa_kinrenka / genzuki_tojiro (/: this round)"},
+        {"item": "CALL/CALLV argument window: base + argc inside the caller frame", "python": "vm_interp.run", "rust": "vm.rs call register window check"},
+        {"item": "CALL arg count fits the CALLEE frame width (argc <= nregs)", "python": "vm_interp.run (/: added this round; used to escape as IndexError)", "rust": "vm.rs call arg count exceeds frame"},
+        {"item": "TUPLE read window base + n inside the frame", "python": "vm_interp.run", "rust": "vm.rs TUPLE window check"},
+        {"item": "ARGV/STDIN index inside the ABSORBED runtime window (the cell cap, index cap or beyond rejected), non-integer index rejected - reading past the real length yields the derived pad byte, not a rejection", "python": "vm_interp.run (SaayaYamabuki) + vm_isa.hibachi_mana", "rust": "vm.rs OP_ARGV|OP_STDIN arm -> E-111, cap and pad from crate::pins::IFACE_AP/IFACE_SP/L_CHAIN_PAD"},
+        {"item": "input window over cap refused at VM build, never truncated; at/below cap padded up to the cap with the per-cell absorb byte", "python": "RimiUshigome.__init__ (argv_cap/stdin_cap) / vm_isa.hibachi_mana", "rust": "vm.rs Vm::new -> E-112 (boot fill: E-113 via _exit_iface, exit code per cell)"},
+        {"item": "window caps / item cap / separator byte / argv[0] participation / key-file strip mode / overflow exit code are PER CELL, computed once by native_build.koyanagi_rou", "python": "native_build.koyanagi_rou (gates get it from codec.octavio)", "rust": "pins::IFACE_AP / IFACE_SP / IFACE_ARG_MAX / IFACE_JOIN / IFACE_ARGV0 / IFACE_KEYSTRIP / IFACE_REJECT_EXIT, consumed by boot.rs amagase_muyu and vm.rs Vm::new - the window is folded ONLY for artifacts whose header flags bit 5 is set (payload declares it consumes process input); a non-input v2 product neither folds nor validates it, because argv[0] there is the product's own launch path and over-cap on it would refuse startup rather than reject an oversized input (早期轮次)"},
+        {"item": "global kinds accepted: 0 None / 1 Func / 2 Native(<=2) / 3 absorbed len(argv) / 4 absorbed len(stdin) (早期轮次 : the cap, not the real length)", "python": "vm_blob.meta_unpack + RimiUshigome.__init__", "rust": "vm.rs read_globals (E-102 on any other kind)"},
+        {"item": "no unbounded index on the hot path (every panic site became a checked reject: exit 3, never 101)", "python": "vm_interp (Python raises SaayaYamabuki)", "rust": "vm.rs run() regs/globals/funcs/strings/place all via .get()"},
+        {"item": "step budget aborts the payload instead of looping forever", "python": "vm_interp.DEFAULT_STEP_BUDGET", "rust": "vm.rs STEP_BUDGET"}
+      ],
+      "single_sided": [
+        {"item": "physmap injectivity over the 256-byte opcode space is re-verified at load", "side": "rust only", "clearance": "Python RimiUshigome builds inv by dict comprehension (a collision silently drops an opcode). Target: route vm_interp through vm_isa._inverse so both sides reject. Not reachable for a build-side produced blob (hayase_sou is a permutation by construction), so it is an attacker-crafted-header case only."},
+        {"item": "string pool must be valid UTF-8", "side": "python only", "clearance": "Rust keeps raw bytes and prints them as-is. Target: validate UTF-8 in vm.rs read_strings, or drop the check on the Python side - either way both sides must agree. No production payload is affected (compiler emits UTF-8)."},
+        {"item": "func table must be non-empty (n != 0)", "side": "rust only", "clearance": "On the Python side an empty table is caught one step later by entry_fid >= nfuncs. Same reject set, different message; leave until the gate table is machine-checked."},
+        {"item": "PE self-digest (D-3) coverage and key schedule", "side": "both, see d3_guards.self_digest", "clearance": "covered by the  keyed digest: patcher.hayama_marin and boot.rs ars_almal share the section list and the INTEG_KEY formula."}
+      ]
+    },
+    "native_ops": [{"id": 0, "name": "print"}, {"id": 1, "name": "range"}, {"id": 2, "name": "len"}],
+    "subset_rejects": ["dict/list/set display (tuple display allowed since ISA v2)", "import", "exceptions/try", "closures and free vars",
+                       "comprehensions", "method calls and attribute access", "f-strings",
+                       "tuple element strings outside the repr subset (printable ASCII, no backslash, no both-quote forms)",
+                       "global table beyond 255 names (LOADG/STOREG u8 index)", "any opcode outside the covered list"],
+    "visible_assertion": {
+      "mode": "self-process scan with VirtualQuery + ReadProcessMemory(GetCurrentProcess()) under build pin VM_VISIBILITY_PROBE",
+      "thresholds": {"marshal_run_bytes": 0, "ir_run_bytes": 256},
+      "negative_control": "same gate on a v1 artifact must report run ~= payload_len, otherwise the gate has no teeth"
+    },
+    "k3_recalibration": {
+      "status": "measured [日期略], parameters unchanged",
+      "method": "same sliding-window Shannon entropy scan as the build gate (native_build._entropy_runs)",
+      "observed": {"v1_plain_artifact_runs": 6, "v2_artifact_runs": 5, "decoy_sections": [".cfgr1", ".cfgr2"], "decoy_window_hits": 1},
+      "sensitivity": {"threshold_bits_6.5": "runs 7-8", "threshold_bits_7.0": "runs 5-6 (gate)", "threshold_bits_7.5": "runs 0-1 (collapses: gate must stay at 7.0)"},
+      "decision": "min_runs stays 3: v2 keeps 2 decoys + payload = 3 candidates, measured 5 whole-file runs, margin 2",
+      "note": "v2 has slightly fewer runs than v1 (no deflate/marshal-shaped content), the ambiguity face is unchanged; re-measure if the decoy sizing rule or the bucket ladder changes"
+    },
+    "performance_budget": {
+      "micro": "interpreted path <= 10x CPython exec on the multi-chunk reference load (measured 8.2x at chunk=256B/slots=2, i64 value model)",
+      "macro": "for payloads whose CPython exec time is under ~8ms, the v2 artifact is not slower end to end (it does not load pythonXX.dll)",
+      "retest_required": "after the value model and print path are finalised; exceeding the budget triggers the agreed fallback (widen slots / chunk, keep the contiguous run at <= 1 chunk via page isolation)"
+    },
+    "honest_limits": "v2 protects only programs inside the VM subset; 1b Python-layer guard has no object in this shape (recorded as not-applicable, not passed); T7 has nothing to verify (no third-party DLL is loaded) and is replaced by an import-table shape assertion; artifact self-containment still means no confidentiality "
+  },
+
+  "hardening": {
+    "note": "早期轮次+C: three behaviour gates that a shipping input-dependent target must clear before the artifact is written (selfcheck.sophia_valentine, called from codec.octavio when shape is declared). They are behaviour gates, not code gates: each one samples the payload's input function as a black box (CPython reference leg) and asserts a property. Failure raises SelfcheckError, so nothing is written. Sampling on the reference leg is deliberate - the VM leg's byte-for-byte equivalence is pinned by ponto_nei plus the native suites, and the same gate set on vm_interp measured 233 s per target (14k VM steps per full-window evaluation) which cannot live in a build path.",
+    "iface": {
+      "since": "早期轮次 Phase 2 (closes : the interface invariants were global constants)",
+      "single_source": "native_build.koyanagi_rou(seed, nonce) - the ONLY place the contract is computed. It feeds three consumers unchanged: the boot pins (IFACE_*), the build-side gates (codec.octavio passes the dict into sophia_valentine/ponto_nei) and the judge-side per-cell contract table written by the scene builder.",
+      "derivation_domains": "HKDF-Extract(salt='i22', ikm=seed||nonce) then HKDF-Expand(info='i23', L=24); one byte per axis. The workbook suggested sha256(\"r12g5/<zone>/<name>/<iface>/<param>\"); that was not used, because zone/cell names are a measurement-scene concept that boot does not (and must not) know - routing the contract through a name-keyed table would add a public 'name -> behaviour' lookup surface to the product. Per-cell-ness comes from 'one seed per cell' instead, exactly as /chunk-perm/variant-select already do (deviation registered in the 早期轮次 report).",
+      "mode": "per_cell",
+      "mode_note": "ROLLOUT SWITCH, not a compatibility shim. 'uniform' reproduces the previous generation's global contract (64/64/64/0x00/skip argv[0]/space-form key-file strip only/overflow exit 3); 'per_cell' derives every axis per cell. Both modes run through the SAME code path (boot and the VM only ever read pins::IFACE_*), so the rollout was a one-line change here. Sign-off [日期略]: flipped to 'per_cell' after the one-zone 8-cell exe prototype passed the contract-driven black-box preflight 8/8 and the judge-side preflight 8/8 (早期轮次 report section 4.7.1). Consequences that are now observable in shipped cells: argv[0] participates on some cells, the join byte may be absent (256), and the overflow exit code may be 4 - the judge harness must feed each cell's recorded contract, not a generation-wide constant. Remaining honest gap (registered as an open item, NOT closed here): the gate-verified contract and the contract the artifact uses are not HARD-bound; a caller that runs gates with iface_mode='per_cell' but builds without pins_override would ship a different interface. Today that is held by the codec.octavio build-report warning plus the case_iface_native assertion; closing it properly means putting an 8-byte contract fingerprint in the artifact header and comparing before asuka_hina emits pins (touches header format +  + boot header check).",
+      "axes": {
+        "ap": "flattened-argv window cap, 48..80 (was: always 64)",
+        "sp": "stdin window cap, 48..80 (was: always 64)",
+        "argmax": "argv item-count cap, 8..40 (was: always 64)",
+        "join": "the byte inserted between argv items; 256 means NO separator at all (was: always 0x00). With no separator, ['ab'] and ['a','b'] flatten to the same window - which is the point: the join rule is no longer public knowledge",
+        "argv0": "whether argv[0] participates in the window (was: never). Honest cost: for the cells where it is on, the output depends on the path string the launcher passed, so the acceptance harness must feed the recorded argv[0] verbatim",
+        "keystrip": "two independent bits: bit0 strip the space form '--key-file <path>' (flag AND path), bit1 strip the equals form '--key-file=<path>'. 4 modes (was: space-form only, globally). Not-stripped forms stay visible to the payload on purpose; key acquisition itself (ex_albio) always reads the space form and is unaffected",
+        "reject_exit": "exit code for 'process input exceeds this cell's window', 3 or 4 (was: always 3). Integrity rejects (guards/MAC/KAT) keep the pinned silent rc=3 contract - this axis covers ONLY the input-overflow channel, so no new observable behaviour class is added to the integrity path",
+        "col3": "semantics family for the payload's third column, one of nonzero|lines|highbit|pairs|printable. Build-side/acceptance-side ONLY: it is deliberately NOT emitted as a pin (a semantics string in .rdata would be exactly the plaintext-semantics leak the release-surface rule forbids, and nothing in boot consumes it - the third column is printed by the payload)"
+      },
+      "col3_deviation": "the workbook's family list included 'byte count'/'char count' (exact input length). After  fixed-length absorption the real length is not available to the payload at all (kind 3/4 report the cap), so those members are unreachable; shipping a 'true length' kind would also force the CPython reference leg to know a number it cannot see. The implemented family is therefore content reductions over the ABSORBED window - all branchless, all expressible with existing opcodes, and none of them is the free linear oracle the workbook wanted removed (deviation registered in the 早期轮次 report)",
+      "gate": "selfcheck.inami_rai (interface_diversity_gate) is scene-level: it needs several cells at once, so the single-cell build path does not run it. Thresholds live in hardening.gates.interface_diversity.",
+      "honest_limits": "the contract values are readable from the artifact by anyone (they are pins, and the behaviour is black-box observable anyway) - per-cell-ization does not make them secret, it makes them NOT AMORTISABLE: an analyst must re-establish the contract per cell instead of once per generation. That is precisely what earlier review measured as free."
+    },
+    "default_shape": "bc2",
+    "default_shape_note": "Sign-off [日期略]: the factory target shape moved from 'bc' to 'bc2' (chain through the native HSTEP opcode, plus the b-couple weight term). Single source for 'which shape ships' - consumers read this key instead of restating a shape literal (test_vm_gates.case_hardening_gates pins the default's gate set through it). 'bc' stays in hardening.shapes so the earlier evidence remains reproducible from the same sources; 'bcx' stays an ablation arm and is deliberately NOT the default - it changes what the target question IS, so the acceptance table and the acceptance generator move with it and later review decides. Honest cost of the move: bc2 is 8,869 VM steps / 1,088 B blob against bc's 14,123 / 1,344, so attacker-side simulation gets ~4x cheaper at the same time the chain leaves the bytecode.",
+    "shapes": {
+      "linear": [],
+      "b": ["structure", "fitting"],
+      "b-rot": ["structure", "fitting"],
+      "b-couple": ["structure", "fitting"],
+      "b-quad": ["structure", "fitting"],
+      "b-alt": ["structure", "fitting"],
+      "c1": ["avalanche", "structure", "fitting"],
+      "bc": ["avalanche", "structure", "fitting"],
+      "c2": ["avalanche", "structure", "fitting", "constants_table", "flatness"],
+      "bc2": ["avalanche", "structure", "fitting", "constants_table", "flatness"],
+      "bcx": ["avalanche", "structure", "fitting", "constants_table", "flatness", "channel_coupling"]
+    },
+    "shape_ablation": "linear is the previous generation (the one such analyses broke with 256 single-byte calibrations + additive rule fitting) and is kept only as the measurement baseline; it declares no new gate because avalanche and position-dependence are false for it by construction - the report states which arm is not covered by which gate instead of pretending all four are equally hard. b/c1/bc are the ablation ladder requested in the sign-off (linear / B /  / B+). 早期轮次 adds the NATIVE-CHAIN generation on top of that ladder: c2 = chain via the HSTEP opcode, bc2 = c2 + the b-couple weight term (the factory default since [日期略] - see hardening.default_shape), bcx = bc2 with the two channels cross-coupled (Phase 3 ablation arm, still not a default). c1/bc stay as they were so the  evidence remains reproducible from the same sources.",
+    "gates": {
+      "avalanche": {
+        "inputs": 64,
+        "min_samples": 64,
+        "flips": [1, 128],
+        "mean_lo": 14,
+        "mean_hi": 18,
+        "floor": 4,
+        "tail_below": 8,
+        "tail_budget": 0.01,
+        "criterion": "mean bit-flips per single-bit input change must sit inside [14,18] on a 32-bit column, the worst sample must be >= 4, and no more than 1% of samples may fall below 8",
+        "why_not_the_literal_16": "an IDEAL avalanche on a 32-bit output is Binomial(32, 1/2): mean exactly 16, sd 2.83. 'Every flip >= 16 bits' is therefore unsatisfiable even for a random function (over 640 samples the minimum belongs at 6-8; measured c1/bc give 8 and 6), and 'mean >= 16' just thresholds a sample mean against its own expectation (SEM ~0.2, so it kills half the passing targets). The band keeps the intent - detect underdiffusion, detect a position that barely matters - without misjudging a good mixer. Measured separation is clean: linear arm 3.0 mean, pure-B arm 8.4 mean (both fail band), c1/bc 15.9-16.1",
+        "positions": "0, 1, 2, middle and last byte of each 64-byte window, both channels"
+      },
+      "structure": {
+        "filler": [97, 98, 99, 100, 101, 102],
+        "probe_byte": 90,
+        "criterion": "col1 for the probe byte inserted at position 0 / 1 / 2 (rest fixed) must be pairwise distinct",
+        "why": "an additive/position-independent shape returns the same value at all three positions - this is the mechanical 'no silent regression to linear' check (design sec 2.2)"
+      },
+      "fitting": {
+        "calib": 256,
+        "holdout": 24,
+        "perm_samples": 8,
+        "models": ["add", "pos+", "pos-", "add+len"],
+        "criterion": "every additive-family model fitted from 256 single-byte calibrations must have a 100% error rate on acceptance inputs",
+        "why": "this replays the AO attack class automatically - such analyses never touched the VM or the crypto layer, they calibrated the byte weights and fitted a rule. If any model still predicts, the generation is breakable by the same cheap route.",
+        "positive_control": "the same fitter MUST break the linear arm (error rate 0 for 'add'); if it cannot, the tooth is vacuous and its 'attackers must fail' claim is worthless (design sec 9.4). Run by the fitter control script and recorded in the build report."
+      },
+      "constants_table": {
+        "word_bytes": 4,
+        "chain_words": 16,
+        "require_hstep": true,
+        "criterion": "the 16 effective chain constants of THIS cell (recomputed from the VM root by vm_isa.kaburaki_roco) must not appear as a 4-byte little-endian literal anywhere in the plaintext IR stream, in the VM blob, or in the artifact text; and the IR of a c2/bc2/bcx target must contain HSTEP (the chain is native) - the structural claim 'the step is no longer readable as bytecode' has to be assertable, not narrated",
+        "runtime_half": "the matching memory assertion lives in tests/d_side/test_vm_gates.py case_constants_not_table_build and tests/d_side/test_native_vm.py case_constants_not_in_memory: a mid-run dump of the product must not contain a contiguous run of >= 3 of the decoded constants, and MUST contain the 12-byte nonce (positive control - without it a zero hit only proves the instrument is broken, same discipline as external_seed_absent_in_memory)",
+        "negative_control": "the same scan run against the PREVIOUS generation's inline-ARX target must find its literals in the IR (the ka/g1/g2/salt constants shipped as i16 LOADK operands there) - if it cannot, this gate has no teeth"
+      },
+      "flatness": {
+        "ladder_rule": "per channel and per CELL CAP: lengths 0, 1, 2, cap//4, cap//2, cap-1, cap (14 samples over the two channels)",
+        "band_steps": 0,
+        "min_samples": 8,
+        "criterion": "VM steps counted on the authoritative leg must be identical for every sampled input length of that cell (both channels swept independently). band_steps = 0 is not decoration: the absorb pads both windows to the cell cap, so any residual variation means something still reads the input length",
+        "why": " measured the leak directly - zone a counted 191 MAC iterations on an empty argv against 63,743 on 'hello'. That is an input-length channel AND a structural fact ('one byte at a time, count = length') handed to the attacker for free",
+        "cost_note": "short inputs now pay the full-cap work: registered in the 早期轮次 report with measured end-to-end timings",
+        "tooth": "the same function also checks the structural half - every kind 3/4 global slot must read exactly the cell cap. Without that, a payload that never calls len() would pass the step-count test whether or not absorption is in force"
+      },
+      "interface_diversity": {
+        "min_cells": 4,
+        "min_distinct": {"ap": 2, "sp": 2, "argmax": 2, "join": 2, "argv0": 2, "keystrip": 2, "reject_exit": 2},
+        "level": "scene (called by the scene builder and by tests/d_side/test_native_builder.py, not by the single-cell build path)",
+        "criterion": "over a set of cells the 7-axis interface fingerprint must not be constant, and every axis must take at least two values",
+        "why": ": three attackers independently rebuilt the SAME contract because it was a global constant. Distinct per-cell digests (the old  check) never covered this - constants varying while the shape stays identical is exactly the gap"
+      },
+      "channel_coupling": {
+        "argv_probe": [104, 101, 108, 108, 111],
+        "stdin_probe": [115, 116, 117, 100, 105],
+        "criterion": "col1 must CHANGE when only stdin changes (and col2 when only argv changes) - i.e. the two channels are not separable. Under bc the two columns are functions of disjoint inputs, so a fixed-point scan on one column is unaffected by the other and the 2-D problem splits into two 1-D ones",
+        "why": "prior finding : such analyses all ran the same channel-separation experiment as their first step and reduced the joint input space accordingly",
+        "status": "ablation arm only (bcx). Turning it into the default changes what the target question IS, so the acceptance table and the acceptance generator move with it and the measurement decides"
+      }
+    },
+    "derivation_domains": "gate sampling uses blake2s(domain || seed || nonce) then HKDF-Expand with per-index info (domain, i, 0x03) - separate domains from the build probes (b'probe') and from the acceptance input table (b'i1'), so no gate ever scores a sample the acceptance run also uses, and nothing is random at runtime"
+  },
+
+  "embedded_home": {
+    "default": "off; build-native --embed-home lean|std|full 产出单文件 exe（B 方案）",
+    "pack": "RT_RCDATA 'home'：magic PHM1 + u32 条目数 + 每条 [u16 名长, ASCII 相对名, u64 大小, 32B BLAKE2s, 数据]；名限相对路径，禁 .. 与分隔符注入",
+    "cache": "生产缓存根 = KnownFolder(LocalAppData) + PracticeEncryption；目录名 home-<包哈希前 16 hex>；构建期钉子 HOME_CACHE_ROOT 非空时整体替换缓存根（测试齿）",
+    "integrity": "包整体哈希进 pins（.text，自校验覆盖）；释放后按包内逐文件哈希复用，任一漂移即整目录重释放（自愈）；DLL 另走既有版本资源 + Authenticode 钉",
+    "resolution": "exe 同目录 pythonXY.dll 在场 = 文件夹档快速路径（旧行为不变）；缺席且 EMBED_HOME 开启 → 释放/复用内嵌 home。vcruntime 不在包内也不预载：pythonXY.dll 的 VCRUNTIME140(_1) 依赖由 LoadLibraryExW 的 SYSTEM32 搜索面解析（exe 自身已导入 VCRUNTIME140.dll，实测 PE 导入表，故该模块此刻必已在进程内）",
+    "modes": {
+      "lean": "pythonXY.dll + 确定性 stdlib pythonXY.zip（纯 Python 载荷；exe ≈12MB）",
+      "std": "lean + 常用扩展 pyd/DLL（_socket/_ctypes/_decimal/_hashlib/_lzma/_elementtree 等，不含 ssl/sqlite；exe ≈15MB）",
+      "full": "std + _ssl/libssl/libcrypto + _sqlite3/sqlite3（exe ≈21MB）"
+    },
+    "prereqs": "std/full 需构建机 CPython 发行版含所列 pyd/DLL（官方 python.org 构建满足）。vcruntime 不打包：微软专有再分发件，且从 System32 取件不在其再分发条款支持范围内；目标机须已装 VC++ 2015-2022 (x64) 运行库。这条前提本就存在——boot exe 自身即导入 VCRUNTIME140.dll（实测 PE 导入表），缺件时 OS 加载器先行报错，产物无需自带提示",
+    "stdlib_zip": "固定时间戳 1980-01-01/固定属性/按相对路径排序；剔除 site-packages、test/tests、__pycache__、idlelib、turtledemo、lib2to3、ensurepip、tkinter；两次构建逐字节一致",
+    "honest_limits": "首启一次性写盘；自我释放 DLL 属 dropper 启发式敏感行为，EDR/AV 可能拦截或拖慢；tkinter 不在内（需 Lib + tcl 数据目录）；--no-guards 档下 .text 自校验关闭，包哈希钉与 home 资源可被同一改写者一并替换（与「攻击者持产物」模型一致，非新增缺口）；运行期强度口径不变"
+  },
+  "fill_derivation": "build-side only: HKDF-Expand(HKDF-Extract(b'', seed ++ nonce), info=b'fill\\x01', L=bucket - payload_len)",
+  "acceptance_ref": "tests/d_side/test_dside_codec.py",
+  "header_len_note": "MUST equal the sum of header_field_spec sizes (asserted at build); historical value 48 was a stale draft leftover, corrected at 早期轮次 implementation"
+}

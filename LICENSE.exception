@@ -1,0 +1,48 @@
+Additional Permission: Output Is Not Covered by This License
+
+Copyright (C) 2026 Diderde
+
+As an additional permission under section 7 of the GNU General Public
+License, version 3 ("GPLv3"), the copyright holder of this program grants
+the following permission concerning the output produced by this program.
+
+1. What "output" means here
+
+   "Output" is anything produced by running this program, in whatever
+   form, including: transformed or obfuscated source files; encrypted
+   data containers; and native executable files assembled by this
+   program's build pipeline - together with whatever portion of this
+   program's code or data this program embeds into, or links with, that
+   output (for example the boot loader and the runtime loader stub).
+
+2. The permission
+
+   The Output is not covered by GPLv3. You may copy, distribute and
+   convey the Output under terms of your own choosing, and you are not
+   obliged to provide source code for the Output, to license it under
+   GPLv3, or to pass on to recipients of the Output any obligation that
+   GPLv3 would otherwise impose on it.
+
+3. What this permission does not do
+
+   (a) It does not apply to this program's own source code. Work based on
+       or derived from that source code - including modifications,
+       translations and recombined builds of it - remains governed by
+       GPLv3, and conveying it is subject to GPLv3 in full.
+   (b) It does not apply to a copy of this program conveyed as such, as
+       opposed to being produced by running it.
+   (c) It grants nothing over third-party material. Components that are
+       independently protected and that you embed, bundle, link or pack
+       with the Output - runtimes, libraries, data files - stay under
+       their own terms, which this permission neither grants nor waives.
+       The third-party inventory of this program is `Licenses/`.
+   (d) It confers no warranty, no limitation of liability beyond what
+       GPLv3 provides, and no permission to use any name, mark or logo.
+
+4. Scope of the grant
+
+   This Additional Permission is granted by the copyright holder named
+   above and applies to the program as distributed by that holder. If you
+   add your own material to the program, you may attach additional
+   permissions to the material you added, but not to material that was
+   already licensed under GPLv3 with this permission attached.
