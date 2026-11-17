@@ -1,0 +1,17 @@
+{
+  "clockRef": "01:34:25",
+  "files": [
+    {
+      "afterContent": "\"\"\"Static analysis: build xref map from .text to .rdata strings via capstone.\n\nUsage: python xref.py <exe> [focus_hex...]\nPrints code addresses referencing interesting .rdata data.\n\"\"\"\nimport sys, struct\nfrom capstone import Cs, CS_ARCH_X86, CS_MODE_64\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\")\n\ndef main():\n    exe = sys.argv[1]\n    d = (ROOT / exe).read_bytes() if not Path(exe).is_absolute() else Path(exe).read_bytes()\n    text_raw, text_size = 0x400, 0x3d400\n    text_rva = 0x1000\n    imgbase = 0x140000000\n    code = d[text_raw:text_raw + text_size]\n    md = Cs(CS_ARCH_X86, CS_MODE_64)\n    md.detail = True\n    # interest: .rdata file 0x3d800..0x4f000 -> rva 0x3f000..0x51000\n    rd_lo, rd_hi = 0x3f000, 0x51000\n    xrefs = {}  # target rva -> [insn addrs]\n    count = 0\n    for insn in md.disasm(code, imgbase + text_rva):\n        count += 1\n        for op in insn.operands:\n            if op.type == 3:  # MEM\n                if op.mem.base == 0 and op.mem.index == 0:  # absolute disp (rare)\n                    pass\n                if op.mem.base == 41 or op.mem.base == 0:  # X86_REG_RIP=41\n                    tgt = insn.address + insn.size + op.mem.disp\n                    rva = tgt - imgbase\n                    if rd_lo <= rva < rd_hi:\n                        xrefs.setdefault(rva, []).append(insn.address)\n    print(f'disassembled {count} instructions, {len(xrefs)} .rdata xrefs')\n    # label strings locations in .rdata\n    rdata = d[0x3d800:0x3d800 + 0x11800]\n    def find_off(pat):\n        return rdata.find(pat)\n    targets = {}\n    for lab in [b'vm-fill-key-v1-0db0', b'vm-root-v1-9517', b'blake2s-key-v1-52be',\n                b'\"blob_magic\"', b'hkdf-sha256', b'resident_slots', b'.v3', b'PyMarshal_ReadObjectFromString',\n                b'integ_key', b'__main__', b'isa_ver']:\n        off = find_off(lab)\n        if off >= 0:\n            rva = 0x3f000 + off\n            targets[lab.decode(errors='replace')] = rva\n            xr = xrefs.get(rva, [])\n            print(f'{lab.decode(errors=\"replace\")!r} rva={rva:#x} xrefs={[hex(a) for a in xr[:8]]} ({len(xr)})')\n    # dump xref density: which .rdata targets get referenced most\n    import json\n    (ROOT / '_work/t1/xrefs.json').write_text(json.dumps({hex(k): [hex(a) for a in v] for k, v in xrefs.items()}))\n    print('saved xrefs.json')\n\nif __name__ == '__main__':\n    main()\n",
+      "afterContentLength": 2401,
+      "beforeContent": null,
+      "existedBefore": false,
+      "path": "<G5A_WORKDIR>\\_work\\xref.py",
+      "structuredPatch": []
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0040",
+  "toolName": "Write",
+  "version": 1
+}

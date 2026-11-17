@@ -1,0 +1,17 @@
+{
+  "clockRef": "00:45:07",
+  "files": [
+    {
+      "afterContent": "\"\"\"Black-box probe driver for g5-a targets.\n\nUsage:\n  python probe.py <exe_path>                 # interactive batch from JSON on stdin\nEcho JSON lines: {\"args\": [...], \"stdin_hex\": \"...\"} -> prints result line\n  {\"out_hex\":..., \"err_hex\":..., \"rc\":...}\nOr import run_case(exe, args, stdin_bytes, timeout) from other scripts.\n\"\"\"\nimport subprocess, sys, json, os\n\ndef run_case(exe, args=None, stdin=b'', timeout=10, cwd=None):\n    exe = str(exe)\n    cwd = str(cwd) if cwd else os.path.dirname(exe)\n    try:\n        p = subprocess.run([exe] + (args or []), input=stdin, cwd=cwd,\n                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)\n        return p.stdout, p.stderr, p.returncode\n    except subprocess.TimeoutExpired:\n        return b'<TIMEOUT>', b'', -1\n\ndef main():\n    exe = sys.argv[1]\n    for line in sys.stdin:\n        line = line.strip()\n        if not line:\n            continue\n        c = json.loads(line)\n        out, err, rc = run_case(exe, c.get('args'), bytes.fromhex(c.get('stdin_hex', '')),\n                                timeout=c.get('timeout', 10))\n        print(json.dumps({'out_hex': out.hex(), 'err_hex': err.hex(), 'rc': rc}), flush=True)\n\nif __name__ == '__main__':\n    main()\n",
+      "afterContentLength": 1240,
+      "beforeContent": null,
+      "existedBefore": false,
+      "path": "<G5A_WORKDIR>\\_work\\probe.py",
+      "structuredPatch": []
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0013",
+  "toolName": "Write",
+  "version": 1
+}

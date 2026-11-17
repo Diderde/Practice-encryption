@@ -1,0 +1,17 @@
+{
+  "clockRef": "00:56:23",
+  "files": [
+    {
+      "afterContent": "\"\"\"Fuzzy-match heap regions between two dumps by 64-byte content shingles.\"\"\"\nimport json, sys, hashlib\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\")\n\ndef load(tag):\n    d = (ROOT / f'_work/t1/{tag}').read_bytes()\n    idx = json.loads((ROOT / f'_work/t1/{tag}.idx.json').read_text())\n    return d, idx\n\ndef shingles(b, step=16, k=64):\n    return {hashlib.blake2b(b[i:i+k], digest_size=8).digest() for i in range(0, max(0, len(b)-k), step)}\n\nd1, i1 = load(sys.argv[1])\nd2, i2 = load(sys.argv[2])\ntag1, tag2 = sys.argv[1], sys.argv[2]\n\n# only heap-like regions: low addresses (non-DLL), exclude stacks/PEB (small ones ok to include)\ndef heapy(r):\n    a = r['addr']\n    return a < 0x7ff000000000 and r['size'] >= 65536\n\nregs2 = []\nfor r in i2:\n    if heapy(r):\n        b = d2[r['off']:r['off']+r['size']]\n        regs2.append((r['addr'], r['size'], shingles(b)))\nprint(f'dump2 heap regions: {len(regs2)}, total shingles {sum(len(s) for _,_,s in regs2)}')\n\nfor r in i1:\n    if not heapy(r):\n        continue\n    b1 = d1[r['off']:r['off']+r['size']]\n    s1 = shingles(b1)\n    hits = []\n    for addr, size, s2 in regs2:\n        inter = len(s1 & s2)\n        if inter > 10:\n            hits.append((inter, addr, size))\n    if hits:\n        hits.sort(reverse=True)\n        print(f'{tag1} addr={r[\"addr\"]:#x} size={r[\"size\"]}: matches {[(i2, hex(a), s) for i2, a, s in hits[:3]]}')\n",
+      "afterContentLength": 1415,
+      "beforeContent": null,
+      "existedBefore": false,
+      "path": "<G5A_WORKDIR>\\_work\\fuzzydiff.py",
+      "structuredPatch": []
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0020",
+  "toolName": "Write",
+  "version": 1
+}

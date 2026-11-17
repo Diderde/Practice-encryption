@@ -1,0 +1,17 @@
+{
+  "clockRef": "02:30:49",
+  "files": [
+    {
+      "afterContent": "\"\"\"Analyze all targets' samples: structure, limits, orthogonality, determinism.\"\"\"\nimport json, subprocess, random\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\")\n\ndef run(exe, args, stdin):\n    p = subprocess.run([str(exe)] + list(args), input=stdin, cwd=str(exe.parent),\n                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)\n    return p.stdout.decode('utf-8', 'backslashreplace'), p.stderr.decode('utf-8', 'backslashreplace'), p.returncode\n\ndef parse3(out):\n    parts = out.split()\n    if len(parts) == 3:\n        try:\n            return int(parts[0]), int(parts[1]), int(parts[2])\n        except ValueError:\n            pass\n    return None\n\n# ---- T4 determinism ----\nprint('== T4 determinism (same input x 15) ==')\nseen = {}\nfor i in range(15):\n    out, err, rc = run(ROOT / 'T4/app.exe', [], b'hello\\n')\n    seen[(out, rc)] = seen.get((out, rc), 0) + 1\nfor k, v in seen.items():\n    print(f'  x{v}: rc={k[1]} out={k[0]!r}')\n\n# ---- per-target sample analysis ----\nfor t in ['t2', 't3', 't6', 't8', 't5', 't7']:\n    p = ROOT / f'_work/{t}/samples.jsonl'\n    if not p.exists():\n        continue\n    rows = [json.loads(l) for l in p.read_text(encoding='utf-8').splitlines()]\n    rcs = {}\n    shapes = {}\n    fails = []\n    for r in rows:\n        rcs[r['rc']] = rcs.get(r['rc'], 0) + 1\n        pr = parse3(r['out']) if r['out'] else None\n        if pr:\n            shapes['3num'] = shapes.get('3num', 0) + 1\n        elif r['rc'] == 0:\n            shapes['other-ok'] = shapes.get('other-ok', 0) + 1\n        if r['rc'] != 0 or not r['out']:\n            fails.append((r['label'], len(bytes.fromhex(r['stdin_hex'])), r['rc']))\n    print(f'== {t}: rc={rcs} shapes={shapes}')\n    # length limit from bases\n    for r in rows:\n        if r['label'] == 'base':\n            n = len(bytes.fromhex(r['stdin_hex']))\n            if r['rc'] != 0:\n                print(f'   base fail: len={n} rc={r[\"rc\"]}')\n    # orthogonality: same stdin different args -> same h2?\n    h2_by_stdin = {}\n    viol = 0\n    for r in rows:\n        pr = parse3(r['out']) if r['out'] else None\n        if pr:\n            key = r['stdin_hex']\n            if key in h2_by_stdin and h2_by_stdin[key] != pr[1]:\n                viol += 1\n            h2_by_stdin[key] = pr[1]\n    print(f'   h2-orthogonality violations: {viol} over {len(h2_by_stdin)} stdin values')\n    h1_by_args = {}\n    viol1 = 0\n    for r in rows:\n        pr = parse3(r['out']) if r['out'] else None\n        if pr:\n            key = json.dumps(r['args'])\n            if key in h1_by_args and h1_by_args[key] != pr[0]:\n                viol1 += 1\n            h1_by_args[key] = pr[0]\n    print(f'   h1-orthogonality violations: {viol1}')\n    # third component patterns\n    h3 = {}\n    for r in rows:\n        pr = parse3(r['out']) if r['out'] else None\n        if pr:\n            h3[json.dumps(r['args'])] = pr[2]\n    if len(set(h3.values())) <= 12:\n        print('   h3 by args:', h3)\n",
+      "afterContentLength": 2983,
+      "beforeContent": null,
+      "existedBefore": false,
+      "path": "<G5A_WORKDIR>\\_work\\analyze_all.py",
+      "structuredPatch": []
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0053",
+  "toolName": "Write",
+  "version": 1
+}

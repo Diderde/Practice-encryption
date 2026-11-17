@@ -1,0 +1,84 @@
+{
+  "clockRef": "02:51:27",
+  "files": [
+    {
+      "afterContent": "\"\"\"Write notes.txt per target and verify equivalent.py against app.exe.\n\nrandom.Random is used only for test-vector selection (not crypto).\n\"\"\"\nimport json, subprocess, sys, time, random\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\")\ntables = json.loads((ROOT / '_work/tables.json').read_text(encoding='utf-8'))\nsys.path.insert(0, str(ROOT / '_work'))\nfrom gen_deliverables import NOTES_TEMPLATE, FACTS, TDESCRIPTION, HOURS\n\nFSIZES = {p.parent.name: p.stat().st_size for p in sorted(ROOT.glob('T*/app.exe'))}\n\nNOTES_EXTRA = {\n    'T1': '行为细节：H2 覆盖 stdin 原始字节（无换行处理，\"hello\" 与 \"hello\\\\n\" 不同）；'\n          'T1 副本与原行为一致（无部署绑定），全部表格在副本实测。',\n    'T2': \"行为细节：参数含非 ASCII 时 h3=该参数 UTF-8 字节数（单参数纯非 ASCII）；\"\n          \"混合文字参数（'a中'）与 '中文' → exit 3；ASCII 参数 h3=0。\",\n    'T3': '行为细节：h3 = 62 − argv 中 ASCII 字符总数（如 [] → 62、[\"x\"] → 61、'\n          '[\"a\",\"b\"] → 60、[\"á\"] → 62）；长输入退出码为 4（其余目标多为 3）。',\n    'T5': '行为细节：仅在原始目录运行（部署绑定：全部字节级副本在任何位置都 exit 3，'\n          '跨目录名/时间戳/NTFS 创建时间对照均已排除，疑为 NTFS File ID 或路径哈希绑定）；'\n          '参数接受度随时期翻转（02:31 接受、02:44 起拒绝）；h3 随时期在 2/42/46-48 间变化。',\n    'T6': '行为细节：h3 恒 79；长输入退出码 3；副本行为与原一致。',\n    'T7': '行为细节：仅在原始目录运行（部署绑定同 T5）；参数接受度时期翻转；'\n          'h3 在 57 与 10+ASCII 参数字符数 间随时期变化。',\n    'T8': '行为细节：h3 恒 0；长输入退出码 4；副本行为与原一致。',\n    'T4': '行为细节：非确定。02:3x 观测窗内 60 例中 41 例成功输出（同输入不同 H2！），'\n          '此前与此后全部 exit 3；成功期 H1/H3 仍随 argv 确定（H3=41..45），H2 每次不同。'\n          '推测其 VM 依赖时变熵/未初始化状态，无法声明任何等价域。',\n}\n\nnow = time.strftime('%Y-%m-%d %H:%M')\nfor t in ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8']:\n    facts = FACTS[t]\n    notes = NOTES_TEMPLATE.format(\n        target=t, fsize=FSIZES[t], desc=TDESCRIPTION[t], limit=facts['limit'], err=facts['err'],\n        rcv=facts['rcv'], h3_conf=facts['h3_conf'], unresolved=facts['unresolved'],\n        unres2=facts['unres2'], hours=HOURS)\n    notes += '\\n八、本目标行为补充\\n  ' + NOTES_EXTRA[t] + '\\n'\n    (ROOT / t / 'notes.txt').write_text(notes, encoding='utf-8')\n    print('notes.txt ->', t)\n\n# ---------------- verification ----------------\ndef run_cmp(exe_dir, equiv_py, args, stdin):\n    p1 = subprocess.run([str(exe_dir / 'app.exe')] + list(args), input=stdin, cwd=str(exe_dir),\n                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)\n    p2 = subprocess.run([sys.executable, str(equiv_py)] + list(args), input=stdin,\n                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)\n    return (p1.stdout, p1.returncode), (p2.stdout, p2.returncode)\n\nprint('\\n== verification ==')\nrng = random.Random(4242)\nreport = {}\nfor t in ['T1', 'T2', 'T3', 'T6', 'T8', 'T5', 'T7']:\n    tb = tables[t]\n    if t in ('T5', 'T7'):\n        exe_dir = ROOT / t\n    else:\n        exe_dir = ROOT / ('_work/' + t.lower())\n    equiv_py = ROOT / t / 'equivalent.py'\n    ok = bad = 0\n    fails = []\n    stdins = list(tb['h2'].keys())\n    argsets = [json.loads(a) for a in tb['h1'].keys()]\n    for _ in range(120):\n        args = rng.choice(argsets)\n        sh = rng.choice(stdins)\n        data = bytes.fromhex(sh)\n        if len(data) > tb['limit']:\n            continue\n        (o1, r1), (o2, r2) = run_cmp(exe_dir, equiv_py, args, data)\n        if o1 == o2 and r1 == r2:\n            ok += 1\n        else:\n            bad += 1\n            if len(fails) < 3:\n                fails.append((args, sh, o1[:30], o2[:30], r1, r2))\n    rokk = rokb = 0\n    for _ in range(8):\n        (o1, r1), (o2, r2) = run_cmp(exe_dir, equiv_py, [], b'a' * (tb['limit'] + rng.randrange(1, 100)))\n        if (o1, r1) == (o2, r2):\n            rokk += 1\n        else:\n            rokb += 1\n    report[t] = dict(table_ok=ok, table_bad=bad, reject_ok=rokk, reject_bad=rokb, fails=fails)\n    print(t, report[t])\n(ROOT / '_work/verify_report.json').write_text(json.dumps(report, indent=1), encoding='utf-8')\nprint('saved verify_report.json')\n",
+      "afterContentLength": 3839,
+      "beforeContent": "\"\"\"Write notes.txt per target and verify equivalent.py against app.exe.\"\"\"\nimport json, subprocess, sys, time, random\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\")\ntables = json.loads((ROOT / '_work/tables.json').read_text(encoding='utf-8'))\nsys.path.insert(0, str(ROOT / '_work'))\nfrom gen_deliverables import NOTES_TEMPLATE, FACTS, TDESCRIPTION, HOURS\n\nFSIZES = {t: os_size for t, os_size in\n          [(p.name, p.stat().st_size) for p in sorted(ROOT.glob('T*/app.exe'))]}\n\n# per-target notes extra\nNOTES_EXTRA = {\n    'T1': '行为细节：H2 覆盖 stdin 原始字节（无换行处理，\"hello\" 与 \"hello\\\\n\" 不同）；'\n          'T1 副本与原行为一致（无部署绑定），全部表格在副本实测。',\n    'T2': \"行为细节：参数含非 ASCII 时 h3=该参数 UTF-8 字节数（单参数纯非 ASCII）；\"\n          \"混合文字参数（'a中'）与 '中文' → exit 3；ASCII 参数 h3=0。\",\n    'T3': '行为细节：h3 = 62 − argv 中 ASCII 字符总数（如 [] → 62、[\"x\"] → 61、'\n          '[\"a\",\"b\"] → 60、[\"á\"] → 62）；长输入退出码为 4（其余目标多为 3）。',\n    'T5': '行为细节：仅在原始目录运行（部署绑定：全部字节级副本在任何位置都 exit 3，'\n          '跨目录名/时间戳/NTFS 创建时间对照均已排除，疑为 NTFS File ID 或路径哈希绑定）；'\n          '参数接受度随时期翻转（02:31 接受、02:44 起拒绝）；h3 随时期在 2/42/46-48 间变化。',\n    'T6': '行为细节：h3 恒 79；长输入退出码 3；副本行为与原一致。',\n    'T7': '行为细节：仅在原始目录运行（部署绑定同 T5）；参数接受度时期翻转；'\n          'h3 在 57 与 10+ASCII 参数字符数 间随时期变化。',\n    'T8': '行为细节：h3 恒 0；长输入退出码 4；副本行为与原一致。',\n    'T4': '行为细节：非确定。02:3x 观测窗内 60 例中 41 例成功输出（同输入不同 H2！），'\n          '此前与此后全部 exit 3；成功期 H1/H3 仍随 argv 确定（H3=41..45），H2 每次不同。'\n          '推测其 VM 依赖时变熵/未初始化状态，无法声明任何等价域。',\n}\n\nnow = time.strftime('%Y-%m-%d %H:%M')\nfor t in ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8']:\n    facts = FACTS[t]\n    notes = NOTES_TEMPLATE.format(\n        target=t, fsize=FSIZES[t], desc=TDESCRIPTION[t], limit=facts['limit'], err=facts['err'],\n        rcv=facts['rcv'], h3_conf=facts['h3_conf'], unresolved=facts['unresolved'],\n        unres2=facts['unres2'], hours=HOURS)\n    notes = notes.replace('【从未被加载】', '【从未被加载】') \n    # per-target behavioral detail section\n    notes += '\\n八、本目标行为补充\\n  ' + NOTES_EXTRA[t] + '\\n'\n    (ROOT / t / 'notes.txt').write_text(notes, encoding='utf-8')\n    print('notes.txt ->', t)\n\n# ---------------- verification ----------------\ndef run_cmp(exe_dir, equiv_py, args, stdin):\n    p1 = subprocess.run([str(exe_dir / 'app.exe')] + list(args), input=stdin, cwd=str(exe_dir),\n                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)\n    p2 = subprocess.run([sys.executable, str(equiv_py)] + list(args), input=stdin,\n                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)\n    return (p1.stdout, p1.returncode), (p2.stdout, p2.returncode)\n\nprint('\\n== verification ==')\nrng = random.Random(4242)\nreport = {}\nfor t in ['T1', 'T2', 'T3', 'T6', 'T8', 'T5', 'T7']:\n    tb = tables[t]\n    if t in ('T5', 'T7'):\n        exe_dir = ROOT / t\n    else:\n        exe_dir = ROOT / ('_work/' + t.lower())\n    equiv_py = ROOT / t / 'equivalent.py'\n    ok = bad = 0\n    fails = []\n    stdins = list(tb['h2'].keys())\n    argsets = [json.loads(a) for a in tb['h1'].keys()]\n    for _ in range(120):\n        args = rng.choice(argsets)\n        sh = rng.choice(stdins)\n        data = bytes.fromhex(sh)\n        if len(data) > tb['limit']:\n            continue\n        (o1, r1), (o2, r2) = run_cmp(exe_dir, equiv_py, args, data)\n        if o1 == o2 and r1 == r2:\n            ok += 1\n        else:\n            bad += 1\n            if len(fails) < 3:\n                fails.append((args, sh, o1[:30], o2[:30], r1, r2))\n    # reject class\n    rokk = rokb = 0\n    for _ in range(8):\n        (o1, r1), (o2, r2) = run_cmp(exe_dir, equiv_py, [], b'a' * (tb['limit'] + rng.randrange(1, 100)))\n        if (o1, r1) == (o2, r2):\n            rokk += 1\n        else:\n            rokb += 1\n    report[t] = dict(table_ok=ok, table_bad=bad, reject_ok=rokk, reject_bad=rokb, fails=fails)\n    print(t, report[t])\n(ROOT / '_work/verify_report.json').write_text(json.dumps(report, indent=1), encoding='utf-8')\nprint('saved verify_report.json')\n",
+      "existedBefore": true,
+      "path": "<G5A_WORKDIR>\\_work\\write_notes_verify.py",
+      "structuredPatch": [
+        {
+          "oldStart": 1,
+          "oldLines": 4,
+          "newStart": 1,
+          "newLines": 7,
+          "lines": [
+            "-\"\"\"Write notes.txt per target and verify equivalent.py against app.exe.\"\"\"",
+            "+\"\"\"Write notes.txt per target and verify equivalent.py against app.exe.",
+            "+",
+            "+random.Random is used only for test-vector selection (not crypto).",
+            "+\"\"\"",
+            " import json, subprocess, sys, time, random",
+            " from pathlib import Path",
+            " "
+          ]
+        },
+        {
+          "oldStart": 7,
+          "oldLines": 10,
+          "newStart": 10,
+          "newLines": 8,
+          "lines": [
+            " sys.path.insert(0, str(ROOT / '_work'))",
+            " from gen_deliverables import NOTES_TEMPLATE, FACTS, TDESCRIPTION, HOURS",
+            " ",
+            "-FSIZES = {t: os_size for t, os_size in",
+            "-          [(p.name, p.stat().st_size) for p in sorted(ROOT.glob('T*/app.exe'))]}",
+            "+FSIZES = {p.parent.name: p.stat().st_size for p in sorted(ROOT.glob('T*/app.exe'))}",
+            " ",
+            "-# per-target notes extra",
+            " NOTES_EXTRA = {",
+            "     'T1': '行为细节：H2 覆盖 stdin 原始字节（无换行处理，\"hello\" 与 \"hello\\\\n\" 不同）；'",
+            "           'T1 副本与原行为一致（无部署绑定），全部表格在副本实测。',"
+          ]
+        },
+        {
+          "oldStart": 37,
+          "oldLines": 8,
+          "newStart": 38,
+          "newLines": 6,
+          "lines": [
+            "         target=t, fsize=FSIZES[t], desc=TDESCRIPTION[t], limit=facts['limit'], err=facts['err'],",
+            "         rcv=facts['rcv'], h3_conf=facts['h3_conf'], unresolved=facts['unresolved'],",
+            "         unres2=facts['unres2'], hours=HOURS)",
+            "-    notes = notes.replace('【从未被加载】', '【从未被加载】') ",
+            "-    # per-target behavioral detail section",
+            "     notes += '\\n八、本目标行为补充\\n  ' + NOTES_EXTRA[t] + '\\n'",
+            "     (ROOT / t / 'notes.txt').write_text(notes, encoding='utf-8')",
+            "     print('notes.txt ->', t)"
+          ]
+        },
+        {
+          "oldStart": 78,
+          "oldLines": 7,
+          "newStart": 77,
+          "newLines": 6,
+          "lines": [
+            "             bad += 1",
+            "             if len(fails) < 3:",
+            "                 fails.append((args, sh, o1[:30], o2[:30], r1, r2))",
+            "-    # reject class",
+            "     rokk = rokb = 0",
+            "     for _ in range(8):",
+            "         (o1, r1), (o2, r2) = run_cmp(exe_dir, equiv_py, [], b'a' * (tb['limit'] + rng.randrange(1, 100)))"
+          ]
+        }
+      ]
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0057",
+  "toolName": "Write",
+  "version": 1
+}

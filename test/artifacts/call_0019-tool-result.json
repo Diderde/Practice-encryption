@@ -1,0 +1,17 @@
+{
+  "clockRef": "00:54:39",
+  "files": [
+    {
+      "afterContent": "\"\"\"Diff two memory dumps of the same target: find identical regions across runs,\nthen look for bytecode-like blobs (low byte-value spread, plausible sizes).\n\"\"\"\nimport json, sys\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\")\n\ndef load(tag):\n    d = (ROOT / f'_work/t1/{tag}').read_bytes()\n    idx = json.loads((ROOT / f'_work/t1/{tag}.idx.json').read_text())\n    return d, idx\n\nd1, i1 = load('dump1')\nd2, i2 = load(sys.argv[1] if len(sys.argv) > 1 else 'dump2')\n\ndef get(d, idx, addr):\n    for r in idx:\n        if r['addr'] == addr:\n            return d[r['off']:r['off']+r['size']]\n    return None\n\nprint(f'dump1 regions={len(i1)} dump2 regions={len(i2)}')\nm2 = {r['addr']: r for r in i2}\nshared = []\nfor r in i1:\n    if r['addr'] in m2 and m2[r['addr']]['size'] == r['size']:\n        b1 = d1[r['off']:r['off']+r['size']]\n        b2 = d2[m2[r['addr']]['off']:m2[r['addr']]['off']+r['size']]\n        if b1 == b2:\n            shared.append((r['addr'], r['size']))\nprint(f'shared identical regions: {len(shared)}, total {sum(s for _,s in shared)} bytes')\nfor addr, size in shared:\n    if size >= 4096:\n        print(f'  addr={addr:#x} size={size}')\n\n# in shared regions, find bytecode-like stretches: entropy per 4KB block, small-byte fraction\nimport math\nfrom collections import Counter\ndef stats(b):\n    c = Counter(b); n = len(b)\n    ent = -sum((v/n)*math.log2(v/n) for v in c.values()) if n else 0\n    small = sum(v for k, v in c.items() if k < 0x20) / n if n else 0\n    return ent, small\n\nprint('== large shared regions detail ==')\nfor addr, size in shared:\n    if size < 2048:\n        continue\n    b1 = get(d1, i1, addr)\n    # scan 1024-byte windows for low-entropy / small-byte-heavy windows\n    wins = []\n    for off in range(0, size - 1024, 1024):\n        ent, small = stats(b1[off:off+1024])\n        if small > 0.5 or ent < 5.0:\n            wins.append((off, round(ent,2), round(small,2)))\n    if wins:\n        print(f'addr={addr:#x} size={size} candidate windows (off,ent,small): {wins[:8]}')\n",
+      "afterContentLength": 2045,
+      "beforeContent": null,
+      "existedBefore": false,
+      "path": "<G5A_WORKDIR>\\_work\\diffdump.py",
+      "structuredPatch": []
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0019",
+  "toolName": "Write",
+  "version": 1
+}

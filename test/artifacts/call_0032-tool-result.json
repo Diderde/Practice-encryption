@@ -1,0 +1,17 @@
+{
+  "clockRef": "01:22:18",
+  "files": [
+    {
+      "afterContent": "\"\"\"Dump only low-address (heap) committed regions of a suspended process. No kill.\n\nUsage: python memdump_heap.py <pid> <outfile>\n\"\"\"\nimport sys, ctypes, ctypes.wintypes as wt, json\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\").resolve()\n\ndef safe(p) -> Path:\n    rp = Path(p).resolve()\n    if rp != ROOT and ROOT not in rp.parents:\n        raise ValueError(\"outside ROOT\")\n    return rp\n\nk32 = ctypes.WinDLL('kernel32', use_last_error=True)\nPROCESS_ALL_ACCESS = 0x1F0FFF\nMEM_COMMIT = 0x1000\n\nclass MEMORY_BASIC_INFORMATION64(ctypes.Structure):\n    _fields_ = [('BaseAddress', ctypes.c_uint64), ('AllocationBase', ctypes.c_uint64),\n                ('AllocationProtect', wt.DWORD), ('__a1', wt.DWORD),\n                ('RegionSize', ctypes.c_uint64), ('State', wt.DWORD),\n                ('Protect', wt.DWORD), ('Type', wt.DWORD), ('__a2', wt.DWORD)]\n\ndef main():\n    pid = int(sys.argv[1])\n    out = safe(sys.argv[2])\n    hp = k32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)\n    if not hp:\n        print('OpenProcess failed', ctypes.get_last_error()); return\n    addr = 0\n    regions = []\n    blob = bytearray()\n    while addr < 0x50000000000:  # heap territory only\n        mbi = MEMORY_BASIC_INFORMATION64()\n        r = k32.VirtualQueryEx(hp, ctypes.c_void_p(addr), ctypes.byref(mbi), ctypes.sizeof(mbi))\n        if not r:\n            break\n        base, size = mbi.BaseAddress, mbi.RegionSize\n        if mbi.State == MEM_COMMIT and mbi.Protect != 0x01 and not (mbi.Protect & 0x100):\n            buf = ctypes.create_string_buffer(size)\n            got = ctypes.c_size_t(0)\n            ok = k32.ReadProcessMemory(hp, ctypes.c_void_p(base), buf, size, ctypes.byref(got))\n            if ok and got.value:\n                regions.append({'off': len(blob), 'addr': base, 'size': got.value, 'protect': mbi.Protect})\n                blob += buf.raw[:got.value]\n        addr = base + size\n    out.write_bytes(bytes(blob))\n    out.with_name(out.name + '.idx.json').write_text(json.dumps(regions), encoding='utf-8')\n    print(f'heap dump {len(blob)} bytes / {len(regions)} regions')\n    k32.CloseHandle(hp)\n\nif __name__ == '__main__':\n    main()\n",
+      "afterContentLength": 2181,
+      "beforeContent": null,
+      "existedBefore": false,
+      "path": "<G5A_WORKDIR>\\_work\\memdump_heap.py",
+      "structuredPatch": []
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0032",
+  "toolName": "Write",
+  "version": 1
+}
