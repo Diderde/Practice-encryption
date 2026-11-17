@@ -31,6 +31,8 @@
 
 ## 测试
 
+<sub>test目录是实际测试副本，跟tests是两码事，我不会取名字就这么取了（）</sub>
+
 ```
 python -m venv .venv
 .venv/Scripts/python -m pip install --require-hashes -r requirements-lock.txt   # 已验证版本 + 摘要校验
