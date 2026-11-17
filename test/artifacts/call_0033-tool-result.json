@@ -1,0 +1,17 @@
+{
+  "clockRef": "01:22:39",
+  "files": [
+    {
+      "afterContent": "\"\"\"Micro-burst execution capture: create suspended, alternate ~us resume spins with\nheap-only snapshots, to trace VM startup/decode phases.\n\nUsage: python microburst.py <dir> <tag> <stdin-escaped> [bursts] [spin_us]\n\"\"\"\nimport sys, ctypes, ctypes.wintypes as wt, subprocess, time\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\").resolve()\n\ndef safe(p) -> Path:\n    rp = Path(p).resolve()\n    if rp != ROOT and ROOT not in rp.parents:\n        raise ValueError(\"outside ROOT\")\n    return rp\n\nk32 = ctypes.WinDLL('kernel32', use_last_error=True)\nPROCESS_ALL_ACCESS = 0x1F0FFF\nTH32CS_SNAPTHREAD = 0x4\nCREATE_SUSPENDED = 0x4\n\nclass THREADENTRY32(ctypes.Structure):\n    _fields_ = [('dwSize', wt.DWORD), ('cntUsage', wt.DWORD), ('th32ThreadID', wt.DWORD),\n                ('th32OwnerProcessID', wt.DWORD), ('tpBasePri', ctypes.c_long), ('tpDeltaPri', ctypes.c_long), ('dwFlags', wt.DWORD)]\n\ndef threads_of(pid):\n    snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)\n    te = THREADENTRY32(); te.dwSize = ctypes.sizeof(te)\n    out = []\n    ok = k32.Thread32First(snap, ctypes.byref(te))\n    while ok:\n        if te.th32OwnerProcessID == pid:\n            out.append(te.th32ThreadID)\n        ok = k32.Thread32Next(snap, ctypes.byref(te))\n    k32.CloseHandle(snap)\n    return out\n\ndef suspend_all(pid):\n    for tid in threads_of(pid):\n        th = k32.OpenThread(0x1FFFFF, False, tid)\n        if th:\n            k32.SuspendThread(th); k32.CloseHandle(th)\n\ndef resume_all(pid):\n    for tid in threads_of(pid):\n        th = k32.OpenThread(0x1FFFFF, False, tid)\n        if th:\n            while k32.ResumeThread(th) > 0:\n                pass\n            k32.CloseHandle(th)\n\ndef main():\n    wdir = safe(sys.argv[1])\n    tag = sys.argv[2]\n    stdin_bytes = sys.argv[3].encode().decode('unicode_escape').encode('latin1') if len(sys.argv) > 3 else b'hello\\n'\n    bursts = int(sys.argv[4]) if len(sys.argv) > 4 else 40\n    spin_us = float(sys.argv[5]) if len(sys.argv) > 5 else 50.0\n    p = subprocess.Popen([str(wdir / 'app.exe')], cwd=str(wdir), creationflags=CREATE_SUSPENDED,\n                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n    p.stdin.write(stdin_bytes)\n    p.stdin.close()\n    t0 = time.time()\n    for i in range(bursts):\n        resume_all(p.pid)\n        end = time.perf_counter() + spin_us / 1e6\n        while time.perf_counter() < end:\n            pass\n        suspend_all(p.pid)\n        if p.poll() is not None:\n            print(f'[{time.time()-t0:7.3f}s] burst {i}: exited rc={p.returncode}')\n            break\n        r = subprocess.run(['<PY312>', str(ROOT / '_work' / 'memdump_heap.py'), str(p.pid), str(wdir / f'{tag}.m{i}')],\n                           capture_output=True, text=True)\n        print(f'[{time.time()-t0:7.3f}s] burst {i}: {r.stdout.strip()}', flush=True)\n    if p.poll() is None:\n        resume_all(p.pid)\n    try:\n        o, e = p.communicate(timeout=20)\n        print(f'final rc={p.returncode} out={o!r}')\n    except subprocess.TimeoutExpired:\n        p.kill()\n\nif __name__ == '__main__':\n    main()\n",
+      "afterContentLength": 3119,
+      "beforeContent": null,
+      "existedBefore": false,
+      "path": "<G5A_WORKDIR>\\_work\\microburst.py",
+      "structuredPatch": []
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0033",
+  "toolName": "Write",
+  "version": 1
+}

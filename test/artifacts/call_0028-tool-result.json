@@ -1,0 +1,62 @@
+{
+  "clockRef": "01:13:45",
+  "files": [
+    {
+      "beforeContent": "\"\"\"Run a target with suspend/resume duty-cycling to stretch execution,\ntaking memory snapshots at intervals.\n\nUsage: python slowrun.py <dir> <tag> <stdin-escaped> [duty_pct] [snapshots] [snap_interval_s]\nWrites <dir>/<tag>.snapN / .idx.json\n\"\"\"\nimport sys, ctypes, ctypes.wintypes as wt, subprocess, time\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\").resolve()\n\ndef safe(p) -> Path:\n    rp = Path(p).resolve()\n    if rp != ROOT and ROOT not in rp.parents:\n        raise ValueError(\"outside ROOT\")\n    return rp\n\nk32 = ctypes.WinDLL('kernel32', use_last_error=True)\nPROCESS_ALL_ACCESS = 0x1F0FFF\nTH32CS_SNAPTHREAD = 0x4\n\nclass THREADENTRY32(ctypes.Structure):\n    _fields_ = [('dwSize', wt.DWORD), ('cntUsage', wt.DWORD), ('th32ThreadID', wt.DWORD),\n                ('th32OwnerProcessID', wt.DWORD), ('tpBasePri', ctypes.c_long), ('tpDeltaPri', ctypes.c_long), ('dwFlags', wt.DWORD)]\n\ndef threads_of(pid):\n    snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)\n    te = THREADENTRY32(); te.dwSize = ctypes.sizeof(te)\n    out = []\n    ok = k32.Thread32First(snap, ctypes.byref(te))\n    while ok:\n        if te.th32OwnerProcessID == pid:\n            out.append(te.th32ThreadID)\n        ok = k32.Thread32Next(snap, ctypes.byref(te))\n    k32.CloseHandle(snap)\n    return out\n\ndef suspend(pid, on):\n    for tid in threads_of(pid):\n        th = k32.OpenThread(0x1FFFFF, False, tid)\n        if th:\n            if on:\n                k32.SuspendThread(th)\n            else:\n                k32.ResumeThread(th)\n            k32.CloseHandle(th)\n\ndef main():\n    wdir = safe(sys.argv[1])\n    tag = sys.argv[2]\n    stdin_bytes = sys.argv[3].encode().decode('unicode_escape').encode('latin1') if len(sys.argv) > 3 else b'hello\\n'\n    snap_count = int(sys.argv[4]) if len(sys.argv) > 4 else 6\n    snap_every = float(sys.argv[5]) if len(sys.argv) > 5 else 1.0\n    p = subprocess.Popen([str(wdir / 'app.exe')], cwd=str(wdir),\n                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n    time.sleep(0.5)  # let VM init complete (pre-input phase)\n    p.stdin.write(stdin_bytes)\n    p.stdin.close()\n    t0 = time.time()\n    snaps = 0\n    next_snap = t0 + 0.05\n    suspended = False\n    while snaps < snap_count and p.poll() is None:\n        now = time.time()\n        if now >= next_snap:\n            r = subprocess.run(['<PY312>', str(ROOT / '_work' / 'memdump_nokill.py'), str(p.pid), str(wdir / f'{tag}.snap{snaps}')],\n                               capture_output=True, text=True)\n            print(f'[{now-t0:6.2f}s] snap{snaps}: {r.stdout.strip()} {r.stderr.strip()}', flush=True)\n            snaps += 1\n            next_snap = time.time() + snap_every\n            # after a dump the process is left suspended by memdump_nokill; resume to continue\n            suspend(p.pid, False)\n            suspended = False\n            time.sleep(0.02)\n        else:\n            # duty-cycle: keep it mostly suspended between snapshots\n            if not suspended:\n                suspend(p.pid, True)\n                suspended = True\n            time.sleep(0.05)\n            suspend(p.pid, False)\n            suspended = False\n            time.sleep(0.005)\n    try:\n        out, err = p.communicate(timeout=20)\n        print(f'exit rc={p.returncode} out={out!r}')\n    except subprocess.TimeoutExpired:\n        p.kill()\n        print('timeout, killed')\n\nif __name__ == '__main__':\n    main()\n",
+      "existedBefore": true,
+      "path": "<G5A_WORKDIR>\\_work\\slowrun.py",
+      "structuredPatch": [
+        {
+          "oldStart": 58,
+          "oldLines": 29,
+          "newStart": 58,
+          "newLines": 16,
+          "lines": [
+            "     p.stdin.close()",
+            "     t0 = time.time()",
+            "     snaps = 0",
+            "-    next_snap = t0 + 0.05",
+            "-    suspended = False",
+            "+    # suspend immediately to freeze progress, then alternate: dump (suspended) / brief resume",
+            "+    suspend(p.pid, True)",
+            "     while snaps < snap_count and p.poll() is None:",
+            "-        now = time.time()",
+            "-        if now >= next_snap:",
+            "-            r = subprocess.run(['<PY312>', str(ROOT / '_work' / 'memdump_nokill.py'), str(p.pid), str(wdir / f'{tag}.snap{snaps}')],",
+            "-                               capture_output=True, text=True)",
+            "-            print(f'[{now-t0:6.2f}s] snap{snaps}: {r.stdout.strip()} {r.stderr.strip()}', flush=True)",
+            "-            snaps += 1",
+            "-            next_snap = time.time() + snap_every",
+            "-            # after a dump the process is left suspended by memdump_nokill; resume to continue",
+            "-            suspend(p.pid, False)",
+            "-            suspended = False",
+            "-            time.sleep(0.02)",
+            "-        else:",
+            "-            # duty-cycle: keep it mostly suspended between snapshots",
+            "-            if not suspended:",
+            "-                suspend(p.pid, True)",
+            "-                suspended = True",
+            "-            time.sleep(0.05)",
+            "-            suspend(p.pid, False)",
+            "-            suspended = False",
+            "-            time.sleep(0.005)",
+            "+        r = subprocess.run(['<PY312>', str(ROOT / '_work' / 'memdump_nokill.py'), str(p.pid), str(wdir / f'{tag}.snap{snaps}')],",
+            "+                           capture_output=True, text=True)",
+            "+        print(f'[{time.time()-t0:6.2f}s] snap{snaps}: {r.stdout.strip()} {r.stderr.strip()}', flush=True)",
+            "+        snaps += 1",
+            "+        suspend(p.pid, False)",
+            "+        time.sleep(0.05)",
+            "+        suspend(p.pid, True)",
+            "     try:",
+            "         out, err = p.communicate(timeout=20)",
+            "         print(f'exit rc={p.returncode} out={out!r}')"
+          ]
+        }
+      ]
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0028",
+  "toolName": "Edit",
+  "version": 1
+}

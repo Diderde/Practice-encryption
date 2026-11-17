@@ -1,0 +1,17 @@
+{
+  "clockRef": "02:46:34",
+  "files": [
+    {
+      "afterContent": "\"\"\"Build per-target behavioral tables from collected samples.\n\nOutputs _work/tables.json: {target: {h2: {stdin_hex: h2}, h1: {args_json: h1},\nh1_examples: [(args, stdin_hex, full_out)...], meta...}}\n\"\"\"\nimport json\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\")\n\ndef parse3(out):\n    parts = out.split()\n    if len(parts) == 3:\n        try:\n            return [int(x) for x in parts]\n        except ValueError:\n            return None\n    return None\n\ndef collect(target, sample_files, limit, err_rc, h3_const=None, h3_rule=None):\n    h2 = {}\n    h1 = {}\n    combos = []\n    for sf in sample_files:\n        p = ROOT / sf\n        if not p.exists():\n            continue\n        for line in p.read_text(encoding='utf-8').splitlines():\n            r = json.loads(line)\n            if r['rc'] != 0 or not r['out']:\n                continue\n            pr = parse3(r['out'])\n            if not pr:\n                continue\n            stdin_hex = r['stdin_hex']\n            args_json = json.dumps(r['args'], ensure_ascii=False, sort_keys=True)\n            if not r['args']:\n                if stdin_hex not in h2:\n                    h2[stdin_hex] = pr[1]\n            if stdin_hex == '' or not stdin_hex:\n                if args_json not in h1:\n                    h1[args_json] = pr[0]\n            combos.append({'args': r['args'], 'stdin_hex': stdin_hex, 'out': r['out'].strip()})\n    return {'h2': h2, 'h1': h1, 'combos': combos[:400], 'limit': limit, 'err_rc': err_rc,\n            'h3_const': h3_const, 'h3_rule': h3_rule}\n\ntables = {}\ntables['T1'] = collect('T1', ['_work/t1/samples.jsonl', '_work/t1/lin_h2.jsonl'], 78, 3, h3_const=0)\ntables['T2'] = collect('T2', ['_work/t2/samples.jsonl'], 79, 3, h3_rule='t2')\ntables['T3'] = collect('T3', ['_work/t3/samples.jsonl'], 62, 4, h3_rule='ascii_count_base62')\ntables['T6'] = collect('T6', ['_work/t6/samples.jsonl'], 69, 3, h3_const=79)\ntables['T8'] = collect('T8', ['_work/t8/samples.jsonl'], 52, 4, h3_const=0)\ntables['T5'] = collect('T5', ['_work/t5/lin_h2.jsonl'], 51, 3, h3_rule='unresolved')\ntables['T7'] = collect('T7', ['_work/t7/lin_h2.jsonl'], 59, 3, h3_rule='unresolved')\n\nfor t, tb in tables.items():\n    print(t, 'h2 vectors:', len(tb['h2']), 'h1 vectors:', len(tb['h1']), 'combos:', len(tb['combos']))\n(ROOT / '_work/tables.json').write_text(json.dumps(tables, ensure_ascii=False), encoding='utf-8')\nprint('saved tables.json')\n",
+      "afterContentLength": 2431,
+      "beforeContent": null,
+      "existedBefore": false,
+      "path": "<G5A_WORKDIR>\\_work\\build_tables.py",
+      "structuredPatch": []
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0054",
+  "toolName": "Write",
+  "version": 1
+}

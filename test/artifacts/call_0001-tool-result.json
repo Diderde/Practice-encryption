@@ -1,0 +1,17 @@
+{
+  "clockRef": "00:27:18",
+  "files": [
+    {
+      "afterContent": "\"\"\"Minimal PE inspector + strings extractor. Process tool for g5-a analysis.\"\"\"\nimport struct, sys, re\n\ndef pe_info(path):\n    d = open(path, 'rb').read()\n    print(f\"file: {path}  size={len(d)}\")\n    if d[:2] != b'MZ':\n        print(\"not MZ\"); return\n    e_lfanew = struct.unpack_from('<I', d, 0x3c)[0]\n    assert d[e_lfanew:e_lfanew+4] == b'PE\\0\\0'\n    coff = e_lfanew + 4\n    machine, nsec, tstamp, symtab, nsym, optsz, chars = struct.unpack_from('<HHIIIHH', d, coff)\n    opt = coff + 20\n    magic = struct.unpack_from('<H', d, opt)[0]\n    pe32p = magic == 0x20b\n    entry = struct.unpack_from('<I', d, opt + 16)[0]\n    imgbase = struct.unpack_from('<Q' if pe32p else '<I', d, opt + 24)[0]\n    print(f\"machine={machine:#x} sections={nsec} optsz={optsz} pe32+={pe32p} entry={entry:#x} imagebase={imgbase:#x}\")\n    secs = []\n    so = opt + optsz\n    for i in range(nsec):\n        name = d[so + i*40: so + i*40 + 8].rstrip(b'\\0').decode('latin1')\n        vsize, vaddr, rsize, raddr = struct.unpack_from('<IIII', d, so + i*40 + 8)\n        secs.append((name, vaddr, vsize, raddr, rsize))\n        print(f\"  sec {name:8s} vaddr={vaddr:#010x} vsize={vsize:#010x} rawaddr={raddr:#010x} rawsize={rsize:#010x}\")\n    # overlay = data after last raw section\n    end = max(r + s for (_, _, _, r, s) in secs) if secs else len(d)\n    ov = d[end:]\n    print(f\"overlay: offset={end:#x} size={len(ov)}\")\n    # resource directory\n    ddoff = opt + (112 if pe32p else 96)\n    rva_size = struct.unpack_from('<II', d, ddoff + 2*8)  # dir entry 2 = resources\n    print(f\"resource dir rva={rva_size[0]:#x} size={rva_size[1]:#x}\")\n    return d, secs, end, ov\n\ndef rva2off(rva, secs):\n    for name, vaddr, vsize, raddr, rsize in secs:\n        if vaddr <= rva < vaddr + max(vsize, rsize):\n            return raddr + (rva - vaddr)\n    return None\n\ndef strings(path, minlen=6, enc='ascii', limit=100000):\n    d = open(path, 'rb').read()\n    if enc == 'ascii':\n        pat = re.compile(rb'[\\x20-\\x7e]{%d,}' % minlen)\n        return [m.group().decode('ascii') for m in pat.finditer(d)][:limit]\n    else:  # utf16le\n        pat = re.compile(rb'(?:[\\x20-\\x7e]\\x00){%d,}' % minlen)\n        return [m.group().decode('utf-16le') for m in pat.finditer(d)][:limit]\n\nif __name__ == '__main__':\n    path = sys.argv[1]\n    d, secs, end, ov = pe_info(path)\n    mode = sys.argv[2] if len(sys.argv) > 2 else 'info'\n    if mode == 'strings':\n        mn = int(sys.argv[3]) if len(sys.argv) > 3 else 6\n        for s in strings(path, mn):\n            print(s)\n    elif mode == 'wstrings':\n        mn = int(sys.argv[3]) if len(sys.argv) > 3 else 4\n        for s in strings(path, mn, 'u'):\n            print(s)\n    elif mode == 'overlay':\n        sys.stdout.buffer.write(d[end:])\n",
+      "afterContentLength": 2732,
+      "beforeContent": null,
+      "existedBefore": false,
+      "path": "<G5A_WORKDIR>\\_work\\petool.py",
+      "structuredPatch": []
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0001",
+  "toolName": "Write",
+  "version": 1
+}

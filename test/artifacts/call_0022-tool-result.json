@@ -1,0 +1,17 @@
+{
+  "clockRef": "01:00:24",
+  "files": [
+    {
+      "afterContent": "\"\"\"Test GF(2) linearity of h2 from lin probes and characterize length limit.\"\"\"\nimport json\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\")\nrows = [json.loads(l) for l in (ROOT / '_work/t1/lin_h2.jsonl').read_text(encoding='utf-8').splitlines()]\n\ndef h2of(r):\n    if r['rc'] != 0 or not r['out'].split():\n        return None\n    try:\n        return int(r['out'].split()[1])\n    except (ValueError, IndexError):\n        return None\n\nH = {}\nfor r in rows:\n    h = h2of(r)\n    if h is not None:\n        H[r['name']] = (bytes.fromhex(r['stdin_hex']), h)\n\nh_empty = H['empty'][1]\nprint('h(empty) =', h_empty)\n\n# single byte table\nsb = {}\nfor name, (b, h) in H.items():\n    if name.startswith('b') and len(b) == 1:\n        sb[b[0]] = h\nmissing = [c for c in range(0x100) if c not in sb]\nprint('single-byte entries:', len(sb), 'missing (rc!=0):', [hex(c) for c in missing])\n\n# GF(2) linearity: L(c) = h(c) ^ h(empty); check L(c1^c2) == L(c1)^L(c2)\nbad = 0\ntested = 0\nfor c1 in range(0x100):\n    for c2 in range(0x100):\n        c3 = c1 ^ c2\n        if c1 in sb and c2 in sb and c3 in sb:\n            L1 = sb[c1] ^ h_empty\n            L2 = sb[c2] ^ h_empty\n            L3 = sb[c3] ^ h_empty\n            tested += 1\n            if (L1 ^ L2) != L3:\n                bad += 1\n                if bad <= 5:\n                    print(f'  NONLINEAR: c1={c1:02x} c2={c2:02x} c3={c3:02x} L1^L2={L1^L2:#010x} L3={L3:#010x}')\nprint(f'GF(2) single-byte linearity: {tested} tests, {bad} violations')\n\n# two-byte with trailing zero: check extension: h(c,0) vs linear combo?\ntb = {}\nfor name, (b, h) in H.items():\n    if name.startswith('bb') and len(b) == 2:\n        tb[b[0]] = h\nprint('two-byte entries:', len(tb))\n# Test 1: is h(c,0) == f(h(c), 0x00)? unknown f. Instead test: (h(c,0)^h_empty) related to L(c) by constant shift?\nconsts = set()\nfor c in range(0x100):\n    if c in sb and c in tb:\n        consts.add((tb[c] ^ sb[c] ^ h_empty))\nprint('distinct (h(c,0)^h(c)^h_empty) values:', len(consts), [hex(x) for x in list(consts)[:8]])\n\n# length limit\nfor name, (b, h) in sorted(H.items()):\n    if name.startswith(('a', 'nonl', 'mix')) and not name.startswith(('a' + 'a')):\n        pass\nfor name in [n for n in H if n.startswith('a') or n.startswith('nonl') or n == 'mix']:\n    b, h = H[name]\n    if h is None:\n        print(f'  {name}: len={len(b)} -> rc!=0')\nprint('a78' in H and f\"a78 h={H['a78'][1]:#x}\" or 'a78 missing', 'a79' in H and (f\"a79 h={H['a79'][1]:#x}\" if H['a79'][1] else 'a79 FAILS'))\n",
+      "afterContentLength": 2523,
+      "beforeContent": null,
+      "existedBefore": false,
+      "path": "<G5A_WORKDIR>\\_work\\lintest.py",
+      "structuredPatch": []
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0022",
+  "toolName": "Write",
+  "version": 1
+}

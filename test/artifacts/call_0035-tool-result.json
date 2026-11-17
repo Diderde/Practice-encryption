@@ -1,0 +1,17 @@
+{
+  "clockRef": "01:24:10",
+  "files": [
+    {
+      "afterContent": "\"\"\"Analyze microburst snapshot sequence: locate regions and byte ranges that change.\n\nUsage: python mbdiff.py <dir> <tag> [n]\n\"\"\"\nimport sys, json\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\")\nwdir = ROOT / sys.argv[1] if not sys.argv[1].startswith('_work') else ROOT / sys.argv[1]\ntag = sys.argv[2]\nn = int(sys.argv[3]) if len(sys.argv) > 3 else 40\n\ndef load(i):\n    p = wdir / f'{tag}.m{i}'\n    if not p.exists():\n        return None\n    d = p.read_bytes()\n    idx = json.loads((wdir / f'{tag}.m{i}.idx.json').read_text())\n    return d, idx\n\ndef regions_map(idx):\n    return {r['addr']: r for r in idx}\n\nsnaps = {}\nfor i in range(n):\n    s = load(i)\n    if s:\n        snaps[i] = s\nkeys = sorted(snaps)\nprint('snapshots:', keys[:5], '...', keys[-3:])\nprev = None\nfor i in keys:\n    d, idx = snaps[i]\n    if prev is None:\n        prev = (d, idx)\n        print(f'--- snap {i}: {len(idx)} regions, {len(d)} bytes')\n        for r in idx:\n            print(f'    addr={r[\"addr\"]:#x} size={r[\"size\"]}')\n        continue\n    pd, pidx = prev\n    pm = regions_map(pidx)\n    changes = []\n    for r in idx:\n        if r['addr'] in pm:\n            pr = pm[r['addr']]\n            common = min(r['size'], pr['size'])\n            a = pd[pr['off']:pr['off']+common]\n            b = d[r['off']:r['off']+common]\n            if a != b:\n                # find changed ranges\n                rngs = []\n                st = None\n                for k in range(common):\n                    if a[k] != b[k]:\n                        if st is None:\n                            st = k\n                        lst = k\n                    elif st is not None and k - lst > 64:\n                        rngs.append((st, lst))\n                        st = None\n                if st is not None:\n                    rngs.append((st, lst))\n                changes.append((r['addr'], common, rngs[:6]))\n        else:\n            changes.append((r['addr'], r['size'], 'NEW'))\n    print(f'--- snap {i} vs {i-1}: {len(changes)} changed/new regions')\n    for addr, size, rngs in changes:\n        if rngs == 'NEW':\n            print(f'    NEW addr={addr:#x} size={size}')\n        else:\n            print(f'    addr={addr:#x} size={size} changed-ranges={[(hex(x), hex(y)) for x, y in rngs]}')\n    prev = (d, idx)\n",
+      "afterContentLength": 2317,
+      "beforeContent": null,
+      "existedBefore": false,
+      "path": "<G5A_WORKDIR>\\_work\\mbdiff.py",
+      "structuredPatch": []
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0035",
+  "toolName": "Write",
+  "version": 1
+}

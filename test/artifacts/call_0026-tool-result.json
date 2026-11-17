@@ -1,0 +1,32 @@
+{
+  "clockRef": "01:12:14",
+  "files": [
+    {
+      "beforeContent": "\"\"\"Run a target under a CPU-rate-limited job (stretches ms-scale execution to seconds),\ndump memory repeatedly during execution.\n\nUsage: python midcap.py <dir> <tag> <stdin_text> [cpu_percent] [max_snapshots]\nWrites <dir>/<tag>.snapN + .idx.json\n\"\"\"\nimport sys, os, ctypes, ctypes.wintypes as wt, subprocess, time\nfrom pathlib import Path\n\nROOT = Path(r\"<G5A_WORKDIR>\").resolve()\n\ndef safe(p) -> Path:\n    rp = Path(p).resolve()\n    if rp != ROOT and ROOT not in rp.parents:\n        raise ValueError(\"outside ROOT\")\n    return rp\n\nk32 = ctypes.WinDLL('kernel32', use_last_error=True)\n\nclass JOBOBJECT_CPU_RATE_CONTROL(ctypes.Structure):\n    _fields_ = [('ControlFlags', wt.DWORD), ('CpuRate', wt.WORD), ('Pad', wt.WORD)]\n\nJobObjectCpuRateControlInformation = 21\nJOB_OBJECT_CPU_RATE_CONTROL_ENABLE = 0x1\nJOB_OBJECT_CPU_RATE_CONTROL_HARD_LIMIT = 0x4\nPROCESS_ALL_ACCESS = 0x1F0FFF\n\ndef main():\n    wdir = safe(sys.argv[1])\n    tag = sys.argv[2]\n    stdin_bytes = sys.argv[3].encode().decode('unicode_escape').encode('latin1') if len(sys.argv) > 3 else b'hello\\n'\n    cpu_pct = int(sys.argv[4]) if len(sys.argv) > 4 else 2\n    max_snaps = int(sys.argv[5]) if len(sys.argv) > 5 else 8\n    job = k32.CreateJobObjectW(None, None)\n    ctrl = JOBOBJECT_CPU_RATE_CONTROL()\n    ctrl.ControlFlags = JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_LIMIT\n    ctrl.CpuRate = cpu_pct * 100\n    r = k32.SetInformationJobObject(job, JobObjectCpuRateControlInformation,\n                                    ctypes.byref(ctrl), ctypes.sizeof(ctrl))\n    print('SetInformationJobObject', bool(r), ctypes.get_last_error())\n    p = subprocess.Popen([str(wdir / 'app.exe')], cwd=str(wdir),\n                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n    hproc = k32.OpenProcess(PROCESS_ALL_ACCESS, False, p.pid)\n    r2 = k32.AssignProcessToJobObject(job, hproc)\n    print('AssignProcessToJobObject', bool(r2), ctypes.get_last_error())\n    p.stdin.write(stdin_bytes); p.stdin.close()\n    t0 = time.time()\n    snap = 0\n    while snap < max_snaps and p.poll() is None:\n        time.sleep(0.4)\n        if p.poll() is not None:\n            break\n        out = wdir / f'{tag}.snap{snap}'\n        r = subprocess.run(['<PY312>', str(ROOT / '_work' / 'memdump_nokill.py'), str(p.pid), str(out)],\n                           capture_output=True, text=True)\n        print(f'[{time.time()-t0:5.1f}s] snap{snap}: {r.stdout.strip()} {r.stderr.strip()}')\n        snap += 1\n    try:\n        out, err = p.communicate(timeout=30)\n        print(f'exit rc={p.returncode} out={out!r}')\n    except subprocess.TimeoutExpired:\n        p.kill()\n        print('killed (timeout)')\n\nif __name__ == '__main__':\n    main()\n",
+      "existedBefore": true,
+      "path": "<G5A_WORKDIR>\\_work\\midcap.py",
+      "structuredPatch": [
+        {
+          "oldStart": 20,
+          "oldLines": 7,
+          "newStart": 20,
+          "newLines": 7,
+          "lines": [
+            " class JOBOBJECT_CPU_RATE_CONTROL(ctypes.Structure):",
+            "     _fields_ = [('ControlFlags', wt.DWORD), ('CpuRate', wt.WORD), ('Pad', wt.WORD)]",
+            " ",
+            "-JobObjectCpuRateControlInformation = 21",
+            "+JobObjectCpuRateControlInformation = 13",
+            " JOB_OBJECT_CPU_RATE_CONTROL_ENABLE = 0x1",
+            " JOB_OBJECT_CPU_RATE_CONTROL_HARD_LIMIT = 0x4",
+            " PROCESS_ALL_ACCESS = 0x1F0FFF"
+          ]
+        }
+      ]
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0026",
+  "toolName": "Edit",
+  "version": 1
+}

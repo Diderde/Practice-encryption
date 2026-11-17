@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Practice-encryption"
+version = "0.0.51"
+description = "Layered obfuscation build tool for distributable Python source trees"
+requires-python = ">=3.11"
+# 实测口径：`license = "GPL-3.0-only WITH LicenseRef-OutputException"` 会被 setuptools 的
+# SPDX 校验**拒**（自定义 id 不在已知表内），而 `{text = ...}` 老写法又不能再与
+# license-files 并存。所以表达式只写 GPL-3.0-only，产出例外靠 license-files 随发行件走
+# （wheel 内 dist-info/licenses/ 两份都在，已实测）。SPDX 表达式与源码头的一致性由
+# tests/pyshroud/test_release_surface.py 的 kitami_yusei 用例钉住。
+license = "GPL-3.0-only"
+license-files = ["LICENSE", "LICENSE.exception"]
+
+[tool.setuptools]
+# 显式列包：仓库根还有 b_side/（研究支线）与 samples/（夹具），平铺自动发现
+# 会因"多个顶层包"直接拒绝构建，也会把研究面打进发行包。
+packages = ["pyshroud", "pyshroud.passes", "pyshroud.runtime", "pyshroud.seeding"]
+
+[project.optional-dependencies]
+# 下限取**实测版本**而不是"看起来还行"的老版本：仓里从未在任何 1.x 上跑过 GUI 冒烟，
+# 声明区间宽于验证区间会把"装上了但不兼容"变成最难查的一类故障（能导入、行为未知，
+# 连"缺席即跳过"的降级口径都不触发）。与 requirements-lock.txt 同值。
+gui = ["dearpygui==2.3.1"]
+
+[project.scripts]
+Practice-encryption = "pyshroud.cli:lisa_imai"
+Practice-encryption-gui = "pyshroud.gui:artia"

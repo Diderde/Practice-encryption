@@ -1,0 +1,17 @@
+{
+  "clockRef": "03:22:14",
+  "files": [
+    {
+      "afterContent": "#!/usr/bin/env python3\n\"\"\"Behavioral model for T4/app.exe -- HONEST PARTIAL MODEL.\n\nT4 is nondeterministic across observation eras (<会话日期> ~02:37-02:44 it\nprinted \"H1 H2 h3\" for many inputs -- with H2 differing run-to-run for the\nsame input!; before and after that window it exits 3 with no output for ALL\ninputs, 45+ consecutive observations).  No deterministic equivalence domain\ncan be declared.  This script reproduces the currently dominant all-fail\nbehavior; see notes.txt and domain.txt for the full record.\n\"\"\"\nimport sys\n\n\ndef main():\n    try:\n        sys.stdin.buffer.read()\n    except Exception:\n        pass\n    sys.exit(3)\n\n\nif __name__ == '__main__':\n    main()\n",
+      "afterContentLength": 680,
+      "beforeContent": null,
+      "existedBefore": false,
+      "path": "<G5A_WORKDIR>\\T4\\equivalent.py",
+      "structuredPatch": []
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0065",
+  "toolName": "Write",
+  "version": 1
+}

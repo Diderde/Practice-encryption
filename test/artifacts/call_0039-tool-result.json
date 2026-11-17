@@ -1,0 +1,36 @@
+{
+  "clockRef": "01:30:28",
+  "files": [
+    {
+      "beforeContent": "\"\"\"Correct SipHash implementations (validate against official vectors) + Rust\nDefaultHasher serialization tests against T1 observed values.\"\"\"\nimport json, struct\nfrom pathlib import Path\n\nM = (1 << 64) - 1\n\ndef rotl(x, b):\n    return ((x << b) | (x >> (64 - b))) & M\n\ndef siphash(data, k0, k1, c_rounds, d_rounds):\n    v0 = 0x736f6d6570736575 ^ k0\n    v1 = 0x646f72616e646f6d ^ k1\n    v2 = 0x6c7967656e657261 ^ k0\n    v3 = 0x7465646279746573 ^ k1\n    def rnd():\n        nonlocal v0, v1, v2, v3\n        v0 = (v0 + v1) & M; v1 = rotl(v1, 13); v1 ^= v0; v0 = rotl(v0, 32)\n        v2 = (v2 + v3) & M; v3 = rotl(v3, 16); v3 ^= v2\n        v0 = (v0 + v3) & M; v3 = rotl(v3, 21); v3 ^= v0\n        v2 = (v2 + v1) & M; v1 = rotl(v1, 17); v1 ^= v2; v2 = rotl(v2, 32)\n    n = len(data)\n    i = 0\n    # full blocks: last byte of block = (n & 0xff) per SipHash spec\n    while i + 8 <= n:\n        m = int.from_bytes(data[i:i+8], 'little')\n        v3 ^= m\n        for _ in range(c_rounds):\n            rnd()\n        v0 ^= m\n        i += 8\n    tail = data[i:]\n    last = ((n & 0xFF) << 56) | int.from_bytes(tail + b'\\x00' * (7 - len(tail)), 'little') if len(tail) < 8 else 0\n    v3 ^= last\n    for _ in range(c_rounds):\n        rnd()\n    v0 ^= last\n    v2 ^= 0xFF\n    for _ in range(d_rounds):\n        rnd()\n    return (v0 ^ v1 ^ v2 ^ v3) & M\n\n# official vectors\nk = bytes(range(16))\nk0 = int.from_bytes(k[:8], 'little')\nk1 = int.from_bytes(k[8:], 'little')\ninp = bytes(range(15))\nexp_24 = [0x726fdb47dd0e0e31, 0x74f839c593dc67fd, 0x0d6c8009d9a94f5a]\nexp_13 = [0x69f0b12380b7a70c, 0x3ce07672288be8f5, 0x74de2b18182b22d5]\nok = True\nfor i in range(3):\n    a = siphash(inp[:i], k0, k1, 2, 4)\n    b = siphash(inp[:i], k0, k1, 1, 3)\n    if a != exp_24[i]:\n        print(f'siphash-2-4 MISMATCH len={i}: {a:#x} != {exp_24[i]:#x}'); ok = False\n    if b != exp_13[i]:\n        print(f'siphash-1-3 MISMATCH len={i}: {b:#x} != {exp_13[i]:#x}'); ok = False\nprint('siphash implementations valid:', ok)\n\nROOT = Path(r\"<G5A_WORKDIR>\")\nrows = [json.loads(l) for l in (ROOT / '_work/t1/lin_h2.jsonl').read_text(encoding='utf-8').splitlines()]\n\ndef rust_write_stream(b):\n    return b\n\ndef rust_str(b):\n    return b + b'\\xff'\n\ndef rust_vec_u8(b):\n    return struct.pack('<Q', len(b)) + b\n\ndef rust_vec_string(items):\n    out = struct.pack('<Q', len(items))\n    for s in items:\n        out += s + b'\\xff'\n    return out\n\n# stdin-side tests\nforms = {\n    'raw': lambda b: b,\n    'vec_u8': rust_vec_u8,\n    'str+ff': rust_str,\n    'vec_str1': lambda b: rust_vec_string([b]),\n}\nscore = {}\nfor r in rows:\n    if r['rc'] != 0 or not r['out'].split() or r['args']:\n        continue\n    data = bytes.fromhex(r['stdin_hex'])\n    if len(data) > 78:\n        continue\n    h2 = int(r['out'].split()[1])\n    for fn, form in forms.items():\n        for (cr, dr, nm) in ((1, 3, 'sip13'), (2, 4, 'sip24')):\n            for trunc, tn in ((0xffffffff, 'lo'), (0xffffffff00000000, 'hi')):\n                h64 = siphash(form(data), 0, 0, cr, dr)\n                if (h64 & trunc) == (h64 & 0xffffffff) and trunc == 0xffffffff:\n                    val = h64 & 0xffffffff\n                else:\n                    val = h64 >> 32\n                if val == h2:\n                    score[(fn, nm, tn)] = score.get((fn, nm, tn), 0) + 1\nprint('stdin-side matches:', score)\n\n# args-side: h1 for empty args\nrows2 = [json.loads(l) for l in (ROOT / '_work/t1/samples.jsonl').read_text(encoding='utf-8').splitlines()]\nh1_empty = None\nh1_x = None\nh1_xy = None\nfor r in rows2:\n    if r['label'] == 'args':\n        if r['args'] == []:\n            h1_empty = int(r['out'].split()[0])\n        elif r['args'] == ['x']:\n            h1_x = int(r['out'].split()[0])\n        elif r['args'] == ['x', 'y']:\n            h1_xy = int(r['out'].split()[0])\nprint('h1 empty args:', h1_empty, 'x:', h1_x, 'x,y:', h1_xy)\n# candidates for args serialization\narg_cands = {\n    'vec_empty_len0': struct.pack('<Q', 0),\n    'empty_str+ff': b'\\xff',\n    'empty': b'',\n    'vec_x': rust_vec_string(['x']),\n    'x+ff': b'x\\xff',\n    'x': b'x',\n    'vec_xy': rust_vec_string(['x', 'y']),\n    'xy_ff': b'x\\xffy\\xff',\n    'x_y': b'x y',\n    'join_space': b'x y',\n    'join_nul': b'x\\x00y',\n    'u64_1_x+ff': struct.pack('<Q', 1) + b'x\\xff',\n    'u64_2_xyff': struct.pack('<Q', 2) + b'x\\xffy\\xff',\n    'argv0': b'app.exe',\n}\nfor nm, data in arg_cands.items():\n    for (cr, dr, sn) in ((1, 3, 'sip13'), (2, 4, 'sip24')):\n        h64 = siphash(data, 0, 0, cr, dr)\n        if h1_empty is not None and (h64 & 0xffffffff) == h1_empty:\n            print(f'H1 MATCH {nm} {sn} lo: {data!r}')\n        if h1_empty is not None and (h64 >> 32) == h1_empty:\n            print(f'H1 MATCH {nm} {sn} hi: {data!r}')\n        if h1_x is not None and nm in ('vec_x', 'x+ff', 'x', 'u64_1_x+ff') and ((h64 & 0xffffffff) == h1_x or (h64 >> 32) == h1_x):\n            print(f'H1[x] MATCH {nm} {sn}: {data!r}')\n",
+      "existedBefore": true,
+      "path": "<G5A_WORKDIR>\\_work\\siphash_test.py",
+      "structuredPatch": [
+        {
+          "oldStart": 121,
+          "oldLines": 10,
+          "newStart": 121,
+          "newLines": 10,
+          "lines": [
+            "     'vec_empty_len0': struct.pack('<Q', 0),",
+            "     'empty_str+ff': b'\\xff',",
+            "     'empty': b'',",
+            "-    'vec_x': rust_vec_string(['x']),",
+            "+    'vec_x': rust_vec_string([b'x']),",
+            "     'x+ff': b'x\\xff',",
+            "     'x': b'x',",
+            "-    'vec_xy': rust_vec_string(['x', 'y']),",
+            "+    'vec_xy': rust_vec_string([b'x', b'y']),",
+            "     'xy_ff': b'x\\xffy\\xff',",
+            "     'x_y': b'x y',",
+            "     'join_space': b'x y',"
+          ]
+        }
+      ]
+    }
+  ],
+  "kind": "workspace_file_before_change",
+  "toolCallId": "call_0039",
+  "toolName": "Edit",
+  "version": 1
+}
